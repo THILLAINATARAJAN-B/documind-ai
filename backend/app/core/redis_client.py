@@ -1,3 +1,4 @@
+# backend/app/core/redis_client.py
 import redis
 from app.core.config import get_settings
 
@@ -11,7 +12,6 @@ try:
         redis_client = None
 except Exception:
     redis_client = None
-
 
 def get_redis():
     return redis_client

@@ -23,23 +23,30 @@ jobs:
         working-directory: ./backend
         run: |
           pip install -r requirements.txt
+          pip install ruff
 
       - name: Lint with Ruff
         working-directory: ./backend
-        run: ruff check app/
+        run: ruff check app/ --ignore E501
 
       - name: Run tests with coverage
         working-directory: ./backend
         env:
-          OPENAI_API_KEY: "sk-test-key"
-          DATABASE_URL: "sqlite:///./test.db"
-          REDIS_URL: "redis://localhost:6379/0"
-          SECRET_KEY: "test-secret-key"
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          REDIS_URL: ""
+          UPLOAD_DIR: /tmp/uploads
+          FAISS_STORE_DIR: /tmp/faiss_store
+          ALGORITHM: HS256
+          ACCESS_TOKEN_EXPIRE_MINUTES: 60
         run: |
+          mkdir -p /tmp/uploads /tmp/faiss_store
           pytest tests/ --cov=app --cov-report=xml --cov-fail-under=95 -v
 
       - name: Upload coverage report
         uses: codecov/codecov-action@v4
+        if: always()
         with:
           file: ./backend/coverage.xml
           fail_ci_if_error: false

@@ -12,7 +12,6 @@ from app.services.embeddings import upsert_chunks, delete_user_file_index
 from app.services.chat_engine import summarize_file
 from app.core.redis_client import get_redis
 from typing import List
-import json
 from .deps import get_current_user_dep
 
 router = APIRouter(prefix="/upload", tags=["Upload"])

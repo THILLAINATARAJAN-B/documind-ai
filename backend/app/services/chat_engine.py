@@ -74,7 +74,7 @@ async def stream_answer(
     if file_type in [FileType.audio, FileType.video]:
         if "TIMESTAMP:" in full_content:
             try:
-                ts_line = [l for l in full_content.split("\n") if "TIMESTAMP:" in l][0]
+                ts_line = [line for line in full_content.split("\n") if "TIMESTAMP:" in line][0]
                 ts_value = float(ts_line.split("TIMESTAMP:")[1].strip())
                 yield {"type": "timestamp", "value": ts_value}
             except (ValueError, IndexError):
@@ -84,7 +84,8 @@ async def stream_answer(
 async def summarize_file(file_id: int, user_id: int, db: Session) -> str:
     """Map-reduce summarization over all chunks of a file."""
     from app.services.embeddings import _index_path
-    import os, pickle
+    import os
+    import pickle
 
     path = _index_path(user_id)
     meta_file = os.path.join(path, "metadata.pkl")

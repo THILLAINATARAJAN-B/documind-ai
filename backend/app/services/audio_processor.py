@@ -1,5 +1,4 @@
 import os
-import tempfile
 from typing import List, Dict, Tuple
 from openai import AsyncOpenAI
 from app.core.config import get_settings

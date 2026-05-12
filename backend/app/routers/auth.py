@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import hash_password, verify_password, create_access_token
@@ -10,7 +10,6 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 def get_current_user(token: str, db: Session) -> User:
     from app.core.security import decode_token
-    from fastapi.security import OAuth2PasswordBearer
     payload = decode_token(token)
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid token")

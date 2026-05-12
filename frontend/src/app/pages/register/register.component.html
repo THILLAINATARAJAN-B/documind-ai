@@ -1,0 +1,34 @@
+<div class="auth-page">
+  <div class="auth-card">
+    <div class="logo">
+      <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
+        <rect width="36" height="36" rx="10" fill="#01696f"/>
+        <path d="M10 12h16M10 18h10M10 24h13" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+        <circle cx="27" cy="24" r="5" fill="#4f98a3"/>
+        <path d="M25 24l1.5 1.5L29 22" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+      <span>DocuMind AI</span>
+    </div>
+    <h1>Create account</h1>
+    <p class="subtitle">Start your DocuMind journey</p>
+
+    <form (ngSubmit)="onSubmit()">
+      <div class="field">
+        <label for="email">Email</label>
+        <input id="email" type="email" [(ngModel)]="email" name="email" placeholder="you@example.com" required />
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" type="password" [(ngModel)]="password" name="password" placeholder="Min. 6 characters" required />
+      </div>
+
+      <div class="error" *ngIf="error">{{ error }}</div>
+
+      <button type="submit" [disabled]="loading" class="btn-primary">
+        {{ loading ? 'Creating account...' : 'Create account' }}
+      </button>
+    </form>
+
+    <p class="switch-link">Already have an account? <a routerLink="/login">Sign in</a></p>
+  </div>
+</div>

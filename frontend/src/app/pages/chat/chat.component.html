@@ -1,0 +1,84 @@
+<div class="chat-page">
+  <!-- Sidebar: Segments -->
+  <aside class="sidebar" *ngIf="isMediaFile() && segments.length > 0">
+    <div class="sidebar-header">
+      <span>⏱ Timestamps</span>
+    </div>
+    <div class="segment-list">
+      <div
+        class="segment-item"
+        *ngFor="let seg of segments"
+        (click)="playTimestamp(seg.start_seconds)"
+        [title]="seg.text"
+      >
+        <span class="seg-time">{{ formatTime(seg.start_seconds) }}</span>
+        <span class="seg-text">{{ seg.text | slice:0:70 }}{{ seg.text.length > 70 ? '...' : '' }}</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Chat Area -->
+  <div class="chat-main">
+    <!-- Top Bar -->
+    <header class="chat-header">
+      <button class="back-btn" (click)="goBack()">← Back</button>
+      <div class="file-title">
+        <span>{{ fileInfo?.file_type === 'pdf' ? '📄' : '🎵' }}</span>
+        <span>{{ fileInfo?.original_filename || 'Loading...' }}</span>
+      </div>
+    </header>
+
+    <!-- Media Player (audio/video only) -->
+    <div class="player-bar" *ngIf="isMediaFile()">
+      <audio #mediaPlayer controls class="media-player">
+        Your browser does not support audio playback.
+      </audio>
+    </div>
+
+    <!-- Messages -->
+    <div class="messages-area">
+      <div class="welcome-msg" *ngIf="messages.length === 0">
+        <div class="welcome-icon">💬</div>
+        <p>Ask anything about <strong>{{ fileInfo?.original_filename }}</strong></p>
+        <p class="welcome-sub">I'll answer based on the file content only.</p>
+      </div>
+
+      <div
+        class="message"
+        *ngFor="let msg of messages"
+        [class.user]="msg.role === 'user'"
+        [class.assistant]="msg.role === 'assistant'"
+      >
+        <div class="bubble">
+          <span [innerHTML]="msg.content"></span>
+          <span class="cursor" *ngIf="msg.streaming">▌</span>
+        </div>
+        <div class="timestamp-ref" *ngIf="msg.timestamp_ref !== undefined && msg.role === 'assistant'">
+          <button class="play-btn" (click)="playTimestamp(msg.timestamp_ref!)">
+            ▶ Play from {{ formatTime(msg.timestamp_ref!) }}
+          </button>
+        </div>
+      </div>
+
+      <div #messagesEnd></div>
+    </div>
+
+    <!-- Input -->
+    <div class="input-bar">
+      <textarea
+        [(ngModel)]="question"
+        (keydown)="onEnter($event)"
+        placeholder="Ask a question about this file..."
+        rows="1"
+        [disabled]="isStreaming"
+      ></textarea>
+      <button
+        class="send-btn"
+        (click)="sendMessage()"
+        [disabled]="!question.trim() || isStreaming"
+      >
+        {{ isStreaming ? '...' : '→' }}
+      </button>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,24 @@
+:root {
+  --primary: #01696f;
+  --primary-hover: #0c4e54;
+  --bg: #f7f6f2;
+  --surface: #ffffff;
+  --text: #28251d;
+  --text-muted: #7a7974;
+  --border: rgba(40, 37, 29, 0.12);
+  --radius: 0.75rem;
+  --shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}

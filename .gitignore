@@ -1,0 +1,54 @@
+@"
+# Environment files - NEVER commit these
+.env
+*.env
+.env.*
+!.env.example
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Uploaded user files - runtime data, not source code
+backend/uploads/
+uploads/
+
+# FAISS vector store - runtime data
+backend/faiss_store/
+faiss_store/
+*.faiss
+*.pkl
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Coverage
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+.angular/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+"@ | Out-File -FilePath .gitignore -Encoding utf8

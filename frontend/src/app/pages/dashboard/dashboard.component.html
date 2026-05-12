@@ -1,0 +1,80 @@
+<div class="dashboard">
+  <!-- Header -->
+  <header class="header">
+    <div class="header-inner">
+      <div class="logo">
+        <svg width="32" height="32" viewBox="0 0 36 36" fill="none">
+          <rect width="36" height="36" rx="10" fill="#01696f"/>
+          <path d="M10 12h16M10 18h10M10 24h13" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+          <circle cx="27" cy="24" r="5" fill="#4f98a3"/>
+          <path d="M25 24l1.5 1.5L29 22" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <span>DocuMind AI</span>
+      </div>
+      <button class="btn-ghost" (click)="logout()">Sign out</button>
+    </div>
+  </header>
+
+  <main class="main">
+    <!-- Upload Section -->
+    <section class="upload-section">
+      <h2>Upload Files</h2>
+      <p class="section-sub">Upload a PDF, audio, or video file to start chatting with it.</p>
+      <div class="upload-row">
+        <label class="upload-btn">
+          <input type="file" accept=".pdf" (change)="onFileSelected($event, 'pdf')" hidden />
+          📄 Upload PDF
+        </label>
+        <label class="upload-btn">
+          <input type="file" accept=".mp3,.wav,.mp4,.mov" (change)="onFileSelected($event, 'audio')" hidden />
+          🎵 Upload Audio / Video
+        </label>
+      </div>
+      <div class="uploading-indicator" *ngIf="uploading">
+        <span class="spinner"></span> Processing file...
+      </div>
+      <div class="error-msg" *ngIf="error">{{ error }}</div>
+    </section>
+
+    <!-- Files List -->
+    <section class="files-section">
+      <h2>Your Files</h2>
+
+      <div class="loading-state" *ngIf="loading">
+        <div class="skeleton skeleton-card"></div>
+        <div class="skeleton skeleton-card"></div>
+      </div>
+
+      <div class="empty-state" *ngIf="!loading && files.length === 0">
+        <span class="empty-icon">📂</span>
+        <p>No files yet. Upload a PDF or audio file to get started.</p>
+      </div>
+
+      <div class="file-grid" *ngIf="!loading && files.length > 0">
+        <div class="file-card" *ngFor="let file of files">
+          <div class="file-header">
+            <span class="file-icon">{{ getFileIcon(file.file_type) }}</span>
+            <div class="file-info">
+              <div class="file-name">{{ file.original_filename }}</div>
+              <div class="file-meta">{{ file.file_type.toUpperCase() }} · {{ file.uploaded_at | date:'MMM d, y' }}</div>
+            </div>
+          </div>
+
+          <div class="summary-box" *ngIf="summaries[file.id]">
+            <p>{{ summaries[file.id] }}</p>
+          </div>
+
+          <div class="file-actions">
+            <button class="btn-primary-sm" (click)="openChat(file.id)">
+              💬 Chat
+            </button>
+            <button class="btn-secondary-sm" (click)="getSummary(file.id)" [disabled]="summaryLoading[file.id]">
+              {{ summaryLoading[file.id] ? '...' : '📋 Summarize' }}
+            </button>
+            <button class="btn-danger-sm" (click)="deleteFile(file.id)">🗑</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>

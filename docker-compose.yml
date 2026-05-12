@@ -1,0 +1,59 @@
+version: "3.9"
+
+services:
+  backend:
+    build: ./backend
+    container_name: documind_backend
+    ports:
+      - "8001:8000"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://documind:documind123@postgres:5432/documinddb
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - uploads_data:/app/uploads
+      - faiss_data:/app/faiss_store
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - documind_net
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: documind_postgres
+    environment:
+      POSTGRES_USER: documind
+      POSTGRES_PASSWORD: documind123
+      POSTGRES_DB: documinddb
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U documind -d documinddb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - documind_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: documind_redis
+    ports:
+      - "6380:6379"
+    networks:
+      - documind_net
+
+volumes:
+  postgres_data:
+  uploads_data:
+  faiss_data:
+
+networks:
+  documind_net:
+    driver: bridge

@@ -7,13 +7,16 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { ApiService, TranscriptSegment, FileItem } from '../../core/services/api.service';
 import { SseService } from '../../core/services/sse.service';
+import { AuthService } from '../../core/services/auth.service';
 import { Subscription } from 'rxjs';
+import { environment } from '../../../environments/environment';
 
 interface Message {
   role: 'user' | 'assistant';
   content: string;
   timestamp_ref?: number;
   streaming?: boolean;
+  isError?: boolean;
 }
 
 @Component({
@@ -43,6 +46,7 @@ export class ChatComponent implements OnInit, OnDestroy, AfterViewChecked {
     private router: Router,
     private api: ApiService,
     private sse: SseService,
+    private auth: AuthService,
     private cdr: ChangeDetectorRef
   ) {}
 
@@ -97,6 +101,12 @@ export class ChatComponent implements OnInit, OnDestroy, AfterViewChecked {
         } else if (event.type === 'timestamp' && event.value !== undefined) {
           assistantMsg.timestamp_ref = event.value;
           this.cdr.detectChanges();
+        } else if (event.type === 'error') {
+          assistantMsg.content = event.message || 'Something went wrong. Please try again.';
+          assistantMsg.isError = true;
+          assistantMsg.streaming = false;
+          this.isStreaming = false;
+          this.cdr.detectChanges();
         } else if (event.type === 'done') {
           assistantMsg.streaming = false;
           this.isStreaming = false;
@@ -116,7 +126,7 @@ export class ChatComponent implements OnInit, OnDestroy, AfterViewChecked {
     const el = this.mediaPlayer?.nativeElement;
     if (el) {
       el.currentTime = seconds;
-      el.play();
+      (el as HTMLAudioElement).play();
     }
   }
 
@@ -131,7 +141,8 @@ export class ChatComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   getMediaSrc(): string {
-    return `http://localhost:8001/upload/files/${this.fileId}/stream`;  // fixed port 8001
+    const token = this.auth.getToken();
+    return `${environment.apiUrl}/upload/files/${this.fileId}/stream?token=${token}`;
   }
 
   goBack(): void {

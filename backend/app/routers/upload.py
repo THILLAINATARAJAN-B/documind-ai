@@ -1,6 +1,8 @@
 import os
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File as FastAPIFile
+import mimetypes
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File as FastAPIFile, Query
+from fastapi.responses import FileResponse as FastAPIFileResponse
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.config import get_settings
@@ -11,7 +13,8 @@ from app.services.audio_processor import process_audio_video
 from app.services.embeddings import upsert_chunks, delete_user_file_index
 from app.services.chat_engine import summarize_file
 from app.core.redis_client import get_redis
-from typing import List
+from app.core.security import decode_token
+from typing import List, Optional
 from .deps import get_current_user_dep
 
 router = APIRouter(prefix="/upload", tags=["Upload"])
@@ -94,7 +97,49 @@ def list_files(
     current_user: User = Depends(get_current_user_dep),
     db: Session = Depends(get_db),
 ):
-    return db.query(File).filter(File.user_id == current_user.id).all()
+    return (
+        db.query(File)
+        .filter(File.user_id == current_user.id)
+        .order_by(File.uploaded_at.desc())
+        .all()
+    )
+
+
+@router.get("/files/{file_id}/stream")
+def stream_media(
+    file_id: int,
+    token: Optional[str] = Query(default=None),
+    current_user: Optional[User] = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Serve audio/video file for playback.
+    Accepts JWT via query param ?token=... because <audio> src can't send headers.
+    """
+    # Validate token from query param
+    if not token:
+        raise HTTPException(401, "Token required")
+    payload = decode_token(token)
+    if not payload:
+        raise HTTPException(401, "Invalid or expired token")
+    user = db.query(User).filter(User.id == int(payload.get("sub"))).first()
+    if not user:
+        raise HTTPException(401, "User not found")
+
+    db_file = db.query(File).filter(
+        File.id == file_id, File.user_id == user.id
+    ).first()
+    if not db_file:
+        raise HTTPException(404, "File not found")
+    if not os.path.exists(db_file.file_path):
+        raise HTTPException(404, "File not found on disk")
+
+    mime_type, _ = mimetypes.guess_type(db_file.file_path)
+    return FastAPIFileResponse(
+        path=db_file.file_path,
+        media_type=mime_type or "application/octet-stream",
+        filename=db_file.original_filename,
+    )
 
 
 @router.get("/files/{file_id}/segments", response_model=List[TranscriptSegmentResponse])
@@ -106,7 +151,12 @@ def get_segments(
     db_file = db.query(File).filter(File.id == file_id, File.user_id == current_user.id).first()
     if not db_file:
         raise HTTPException(404, "File not found")
-    return db.query(TranscriptSegment).filter(TranscriptSegment.file_id == file_id).order_by(TranscriptSegment.segment_index).all()
+    return (
+        db.query(TranscriptSegment)
+        .filter(TranscriptSegment.file_id == file_id)
+        .order_by(TranscriptSegment.segment_index)
+        .all()
+    )
 
 
 @router.get("/files/{file_id}/summary", response_model=SummaryResponse)
@@ -121,12 +171,13 @@ async def get_summary(
         raise HTTPException(404, "File not found")
 
     cache_key = f"summary:{file_id}"
-    cached = redis.get(cache_key)
+    cached = redis.get(cache_key) if redis else None
     if cached:
         return SummaryResponse(file_id=file_id, summary=cached, cached=True)
 
     summary = await summarize_file(file_id=file_id, user_id=current_user.id, db=db)
-    redis.setex(cache_key, 3600, summary)
+    if redis:
+        redis.setex(cache_key, 3600, summary)
     return SummaryResponse(file_id=file_id, summary=summary, cached=False)
 
 

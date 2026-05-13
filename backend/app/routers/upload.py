@@ -149,13 +149,18 @@ async def _save_and_process(
     # ---------------- AUDIO / VIDEO PROCESSING ----------------
     else:
 
-        segments, chunks = await process_audio_video(file_path)
+        # process_audio_video now returns:
+        #   segments       → List[Dict]  {text, start, end}   for DB rows
+        #   chunks_with_ts → List[Dict]  {text, start_seconds} for FAISS
+        #
+        # CRITICAL FIX: chunks_with_ts[i]["start_seconds"] is determined by
+        # matching chunk text back to the originating Whisper segment —
+        # NOT by positional index. This fixes wrong timestamps (e.g. 0:06
+        # being returned for "classification problem" instead of 1:44).
+        segments, chunks_with_ts = await process_audio_video(file_path)
 
-        # Build parallel timestamp list for FAISS metadata
-        start_seconds_list = []
-
+        # Save Whisper segments to DB (these power the sidebar timestamp list)
         for i, seg in enumerate(segments):
-
             ts = TranscriptSegment(
                 file_id=db_file.id,
                 text=seg["text"],
@@ -163,18 +168,17 @@ async def _save_and_process(
                 end_seconds=seg["end"],
                 segment_index=i,
             )
-
             db.add(ts)
-
-            # Each segment produces one chunk
-            # Store corresponding start timestamp
-            start_seconds_list.append(seg["start"])
 
         db.commit()
 
-        # Store chunks with timestamps in FAISS metadata
+        # Extract parallel lists for upsert_chunks
+        chunk_texts = [c["text"] for c in chunks_with_ts]
+        start_seconds_list = [c["start_seconds"] for c in chunks_with_ts]
+
+        # Store in FAISS — each chunk now has its correct matched timestamp
         upsert_chunks(
-            chunks,
+            chunk_texts,
             user_id=user.id,
             file_id=db_file.id,
             start_seconds_list=start_seconds_list,
@@ -204,33 +208,21 @@ def stream_media(
 ):
     """
     Serve audio/video file for playback.
-
-    JWT is passed via ?token=
-    because <audio> and <video> tags
+    JWT passed via ?token= because <audio>/<video> tags
     cannot attach Authorization headers.
     """
-
     if not token:
-        raise HTTPException(
-            status_code=401,
-            detail="Token required",
-        )
+        raise HTTPException(status_code=401, detail="Token required")
 
     payload = decode_token(token)
 
     if not payload:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or expired token",
-        )
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     user_id = payload.get("sub")
 
     if not user_id:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid token payload",
-        )
+        raise HTTPException(status_code=401, detail="Invalid token payload")
 
     user = (
         db.query(User)
@@ -239,10 +231,7 @@ def stream_media(
     )
 
     if not user:
-        raise HTTPException(
-            status_code=401,
-            detail="User not found",
-        )
+        raise HTTPException(status_code=401, detail="User not found")
 
     db_file = (
         db.query(File)
@@ -254,16 +243,10 @@ def stream_media(
     )
 
     if not db_file:
-        raise HTTPException(
-            status_code=404,
-            detail="File not found",
-        )
+        raise HTTPException(status_code=404, detail="File not found")
 
     if not os.path.exists(db_file.file_path):
-        raise HTTPException(
-            status_code=404,
-            detail="File not found on disk",
-        )
+        raise HTTPException(status_code=404, detail="File not found on disk")
 
     mime_type, _ = mimetypes.guess_type(db_file.file_path)
 
@@ -283,7 +266,6 @@ def get_segments(
     current_user: User = Depends(get_current_user_dep),
     db: Session = Depends(get_db),
 ):
-
     db_file = (
         db.query(File)
         .filter(
@@ -314,7 +296,6 @@ async def get_summary(
     db: Session = Depends(get_db),
     redis=Depends(get_redis),
 ):
-
     db_file = (
         db.query(File)
         .filter(
@@ -328,15 +309,10 @@ async def get_summary(
         raise HTTPException(404, "File not found")
 
     cache_key = f"summary:{file_id}"
-
     cached = redis.get(cache_key) if redis else None
 
     if cached:
-        return SummaryResponse(
-            file_id=file_id,
-            summary=cached,
-            cached=True,
-        )
+        return SummaryResponse(file_id=file_id, summary=cached, cached=True)
 
     summary = await summarize_file(
         file_id=file_id,
@@ -347,11 +323,7 @@ async def get_summary(
     if redis:
         redis.setex(cache_key, 3600, summary)
 
-    return SummaryResponse(
-        file_id=file_id,
-        summary=summary,
-        cached=False,
-    )
+    return SummaryResponse(file_id=file_id, summary=summary, cached=False)
 
 
 @router.delete("/files/{file_id}", status_code=204)
@@ -360,7 +332,6 @@ def delete_file(
     current_user: User = Depends(get_current_user_dep),
     db: Session = Depends(get_db),
 ):
-
     db_file = (
         db.query(File)
         .filter(

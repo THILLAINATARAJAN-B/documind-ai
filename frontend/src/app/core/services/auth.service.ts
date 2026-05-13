@@ -48,8 +48,12 @@ export class AuthService {
       .pipe(
         tap((res) => {
           this.token = res.access_token;
+          this.userId = res.id || null;
           if (this.isBrowser) {
             localStorage.setItem(TOKEN_KEY, this.token);
+            if (res.id) {
+              localStorage.setItem(USER_ID_KEY, res.id.toString());
+            }
             if (res.refresh_token) {
               this.refreshToken = res.refresh_token;
               localStorage.setItem(REFRESH_KEY, res.refresh_token);
@@ -65,7 +69,7 @@ export class AuthService {
       return throwError(() => new Error('No refresh token available'));
     }
     return this.http
-      .post<{ access_token: string; refresh_token: string }>(
+      .post<{ access_token: string; refresh_token: string; id: number }>(
         `${this.api}/auth/refresh`,
         { user_id: this.userId, refresh_token: this.refreshToken }
       )
@@ -73,9 +77,11 @@ export class AuthService {
         tap((res) => {
           this.token = res.access_token;
           this.refreshToken = res.refresh_token;
+          this.userId = res.id;
           if (this.isBrowser) {
             localStorage.setItem(TOKEN_KEY, res.access_token);
             localStorage.setItem(REFRESH_KEY, res.refresh_token);
+            localStorage.setItem(USER_ID_KEY, res.id.toString());
           }
         }),
         switchMap((res) => [res.access_token]),
@@ -84,6 +90,10 @@ export class AuthService {
           return throwError(() => err);
         })
       );
+  }
+
+  hasRefreshToken(): boolean {
+    return !!this.refreshToken;
   }
 
   logout(): void {

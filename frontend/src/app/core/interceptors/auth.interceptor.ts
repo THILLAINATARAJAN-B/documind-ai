@@ -18,7 +18,11 @@ export const authInterceptor: HttpInterceptorFn = (req: HttpRequest<unknown>, ne
 
   return next(authReq).pipe(
     catchError((error: HttpErrorResponse) => {
-      if (error.status === 401 && !isAuthEndpoint) {
+      // Only attempt token refresh if:
+      // 1. It's a 401 error
+      // 2. Not an auth endpoint
+      // 3. User has a refresh token available
+      if (error.status === 401 && !isAuthEndpoint && authService.hasRefreshToken()) {
         // Access token expired — try to refresh
         return authService.refreshAccessToken().pipe(
           switchMap((newToken: string) => {

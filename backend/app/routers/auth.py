@@ -56,6 +56,7 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     return TokenResponse(
         access_token=access_token,
         refresh_token=refresh_token,
+        id=user.id,
     )
 
 
@@ -90,6 +91,7 @@ def refresh_token_endpoint(payload: RefreshRequest, db: Session = Depends(get_db
     return TokenResponse(
         access_token=new_access,
         refresh_token=new_refresh,
+        id=user.id,
     )
 
 

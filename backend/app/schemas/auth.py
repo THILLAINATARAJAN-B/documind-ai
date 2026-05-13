@@ -16,6 +16,7 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     refresh_token: Optional[str] = None
+    id: int
 
 
 class RefreshRequest(BaseModel):

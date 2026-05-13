@@ -1,6 +1,7 @@
 import os
-import uuid
 import mimetypes
+from fastapi import Query
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File as FastAPIFile, Query
 from fastapi.responses import FileResponse as FastAPIFileResponse
 from sqlalchemy.orm import Session
@@ -105,34 +106,38 @@ def list_files(
     )
 
 
-@router.get("/files/{file_id}/stream")
+@router.get("/files/{file_id}/stream", response_model=None)
 def stream_media(
     file_id: int,
     token: Optional[str] = Query(default=None),
-    current_user: Optional[User] = None,
     db: Session = Depends(get_db),
 ):
     """
     Serve audio/video file for playback.
-    Accepts JWT via query param ?token=... because <audio> src can't send headers.
+    Accepts JWT via ?token=... query param because <audio> src cannot send headers.
     """
-    # Validate token from query param
     if not token:
-        raise HTTPException(401, "Token required")
+        raise HTTPException(status_code=401, detail="Token required")
+
     payload = decode_token(token)
     if not payload:
-        raise HTTPException(401, "Invalid or expired token")
-    user = db.query(User).filter(User.id == int(payload.get("sub"))).first()
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+
+    user = db.query(User).filter(User.id == int(user_id)).first()
     if not user:
-        raise HTTPException(401, "User not found")
+        raise HTTPException(status_code=401, detail="User not found")
 
     db_file = db.query(File).filter(
         File.id == file_id, File.user_id == user.id
     ).first()
     if not db_file:
-        raise HTTPException(404, "File not found")
+        raise HTTPException(status_code=404, detail="File not found")
     if not os.path.exists(db_file.file_path):
-        raise HTTPException(404, "File not found on disk")
+        raise HTTPException(status_code=404, detail="File not found on disk")
 
     mime_type, _ = mimetypes.guess_type(db_file.file_path)
     return FastAPIFileResponse(

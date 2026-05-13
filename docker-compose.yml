@@ -1,9 +1,8 @@
-version: "3.9"
-
 services:
   backend:
     build: ./backend
     container_name: documind_backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-reload
     ports:
       - "8001:8000"
     env_file:
@@ -11,7 +10,6 @@ services:
     environment:
       - DATABASE_URL=postgresql://documind:documind123@postgres:5432/documinddb
       - REDIS_URL=redis://redis:6379/0
-      # Allow both browser (localhost:4200) and SSR internal requests (frontend:4200)
       - ALLOWED_ORIGINS=http://localhost:4200,http://localhost:80,http://frontend:4200,http://frontend:80
     volumes:
       - uploads_data:/app/uploads

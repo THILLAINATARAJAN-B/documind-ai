@@ -1,34 +1,43 @@
-# backend/app/main.py
 import time
-import asyncio
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
 
-from app.core.config import settings
 from app.core.database import engine, Base
+from app.core.config import get_settings          # ✅ correct import
 from app.routers import auth, upload, chat
 
-def create_tables_with_retry(retries: int = 10, delay: float = 2.0):
-    for attempt in range(retries):
+settings = get_settings()                         # ✅ call it here
+
+
+def _create_tables_with_retry(retries: int = 15, delay: float = 2.0) -> None:
+    last_exc = None
+    for attempt in range(1, retries + 1):
         try:
             Base.metadata.create_all(bind=engine)
-            print("✅ Database tables created/verified")
+            print(f"✅ Database tables ready (attempt {attempt})")
             return
-        except Exception as e:
-            print(f"⏳ DB not ready (attempt {attempt+1}/{retries}): {e}")
+        except Exception as exc:
+            last_exc = exc
+            print(f"⏳ Postgres not ready yet (attempt {attempt}/{retries}): {exc}")
             time.sleep(delay)
-    raise RuntimeError("❌ Could not connect to database after retries")
+    raise RuntimeError(
+        f"❌ Could not connect to Postgres after {retries} attempts"
+    ) from last_exc
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    create_tables_with_retry()
+    _create_tables_with_retry()
     yield
+
 
 app = FastAPI(
     title="DocuMind AI",
-    lifespan=lifespan
+    description="AI-powered Document & Multimedia Q&A API",
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -39,10 +48,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth.router, prefix="/auth", tags=["auth"])
-app.include_router(upload.router, prefix="/upload", tags=["upload"])
-app.include_router(chat.router, prefix="/chat", tags=["chat"])
+app.include_router(auth.router)
+app.include_router(upload.router)
+app.include_router(chat.router)
+
 
 @app.get("/health")
-async def health():
-    return {"status": "ok"}
+def health_check():
+    return {"status": "ok", "service": "DocuMind AI"}

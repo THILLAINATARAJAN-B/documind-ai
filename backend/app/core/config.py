@@ -25,8 +25,8 @@ class Settings(BaseSettings):
     # Rate limiting (requests per minute per user)
     rate_limit_per_minute: int = 20
     environment: str = "development"
-    upload_dir: str = "./uploads"
     faiss_store_dir: str = "./faiss_store"
+    upload_dir: str = "./uploads"
     max_file_size_mb: int = 50
     # CORS — comma-separated list of allowed origins
     # Example: "http://localhost:4200,http://frontend:4200"

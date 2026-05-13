@@ -3,7 +3,7 @@ import { inject } from '@angular/core';
 import { catchError, switchMap } from 'rxjs/operators';
 import { throwError } from 'rxjs';
 import { AuthService } from '../services/auth.service';
-import { environment } from '../../../../environments/environment';
+import { environment } from '../../../environments/environment';
 
 export const authInterceptor: HttpInterceptorFn = (req: HttpRequest<unknown>, next: HttpHandlerFn) => {
   const authService = inject(AuthService);

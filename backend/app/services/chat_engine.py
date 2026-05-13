@@ -26,33 +26,50 @@ def _find_best_timestamp(
     answer_text: str,
     segments: List[TranscriptSegment],
     fallback_ts: float,
+    question: str = "",
 ) -> float:
     """
-    Find the most relevant timestamp by matching words from the GPT answer
-    against all TranscriptSegment rows from the DB.
+    Find the most relevant timestamp by scoring each TranscriptSegment against
+    both the GPT answer text and the original question.
 
-    Strategy:
-    1. Tokenize the answer into meaningful words (>4 chars, lowercase).
-    2. For each segment, count how many answer words appear in its text.
-    3. Return the start_seconds of the segment with the highest match score.
-    4. Fall back to fallback_ts if nothing scores above 0.
+    Scoring strategy:
+    - Base score:  count answer words (>4 chars) found in segment text
+    - Bonus score: count question keywords (>2 chars, non-stopword) found in segment,
+                   weighted 2x — question terms are more specific than answer paraphrasing
 
-    This is more accurate than using the top FAISS chunk timestamp because:
-    - FAISS returns the most semantically similar chunk (may span a broad topic)
-    - GPT's actual answer text points to the specific segment being referenced
+    This fixes cases like "regression" where GPT mentions "linear regression" (1:11)
+    AND "regression problem" (1:50) — the question word "regression" boosts 1:50
+    because the segment at 1:50 contains "regression problem" which directly answers
+    the question, while 1:11 only mentions it as an algorithm type.
     """
     if not segments or not answer_text:
         return fallback_ts
 
     answer_lower = answer_text.lower()
-    # Extract meaningful words (skip short stop words)
+    question_lower = question.lower()
+
+    STOPWORDS = {
+        "the", "what", "is", "are", "about", "there", "any", "thing",
+        "that", "this", "with", "from", "have", "been", "will", "was",
+        "for", "can", "how", "does", "did", "its", "and", "not"
+    }
+
+    # Answer words: meaningful words longer than 4 chars
     answer_words = [
         w.strip(".,;:!?()\"'")
         for w in answer_lower.split()
         if len(w.strip(".,;:!?()\"'")) > 4
     ]
 
-    if not answer_words:
+    # Question keywords: all non-stopwords longer than 2 chars
+    question_words = [
+        w.strip(".,;:!?()\"'")
+        for w in question_lower.split()
+        if len(w.strip(".,;:!?()\"'")) > 2
+        and w.strip(".,;:!?()\"'") not in STOPWORDS
+    ]
+
+    if not answer_words and not question_words:
         return fallback_ts
 
     best_score = 0
@@ -60,7 +77,10 @@ def _find_best_timestamp(
 
     for seg in segments:
         seg_lower = seg.text.lower()
+        # Base score from answer text
         score = sum(1 for w in answer_words if w in seg_lower)
+        # 2x bonus from question keywords (more specific signal)
+        score += sum(2 for w in question_words if w in seg_lower)
         if score > best_score:
             best_score = score
             best_ts = seg.start_seconds
@@ -85,7 +105,7 @@ async def stream_answer(
         context_texts = [c["text"] for c in chunk_results] if chunk_results else []
         context = "\n\n".join(context_texts) if context_texts else "No relevant context found."
 
-        # Fallback timestamp = start_seconds of top FAISS chunk (chunk_results[0])
+        # Fallback: start_seconds of the top FAISS chunk
         faiss_fallback_ts: float = 0.0
         if file_type in [FileType.audio, FileType.video] and chunk_results:
             for chunk in chunk_results:
@@ -115,7 +135,7 @@ async def stream_answer(
             max_tokens=800,
         )
 
-        # Collect full answer while streaming tokens to frontend
+        # Stream tokens to frontend while collecting full answer
         full_answer = ""
         async for chunk in stream:
             delta = chunk.choices[0].delta
@@ -123,7 +143,8 @@ async def stream_answer(
                 full_answer += delta.content
                 yield {"type": "token", "content": delta.content}
 
-        # After streaming completes, find the best timestamp using the full answer
+        # After streaming completes, find the best timestamp
+        # Pass question= so question keywords get 2x weight in scoring
         if file_type in [FileType.audio, FileType.video]:
             segments = (
                 db.query(TranscriptSegment)
@@ -135,6 +156,7 @@ async def stream_answer(
                 answer_text=full_answer,
                 segments=segments,
                 fallback_ts=faiss_fallback_ts,
+                question=question,          # ← THIS WAS MISSING IN YOUR CODE
             )
             yield {"type": "timestamp", "value": best_ts}
 

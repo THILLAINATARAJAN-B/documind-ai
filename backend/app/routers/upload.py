@@ -104,14 +104,7 @@ async def _save_and_process(
 
     os.makedirs(settings.upload_dir, exist_ok=True)
 
-    ext = os.path.splitext(file.filename)[1]
-    unique_name = f"{uuid.uuid4()}{ext}"
-
-    file_path = os.path.join(
-        settings.upload_dir,
-        unique_name,
-    )
-
+    # ── 1. Read & validate file size BEFORE touching disk or DB ──────────────
     contents = await file.read()
 
     if len(contents) > settings.max_file_size_mb * 1024 * 1024:
@@ -120,68 +113,79 @@ async def _save_and_process(
             f"File exceeds {settings.max_file_size_mb}MB limit",
         )
 
+    ext = os.path.splitext(file.filename)[1]
+    unique_name = f"{uuid.uuid4()}{ext}"
+    file_path = os.path.join(settings.upload_dir, unique_name)
+
+    # ── 2. Write file to disk ─────────────────────────────────────────────────
     with open(file_path, "wb") as f:
         f.write(contents)
 
-    db_file = File(
-        user_id=user.id,
-        filename=unique_name,
-        original_filename=file.filename,
-        file_type=file_type,
-        file_path=file_path,
-    )
-
-    db.add(db_file)
-    db.commit()
-    db.refresh(db_file)
-
-    # ---------------- PDF PROCESSING ----------------
-    if file_type == FileType.pdf:
-
-        chunks = process_pdf(file_path)
-
-        upsert_chunks(
-            chunks,
+    # ── 3. DB + FAISS inside a try/except — rollback everything on failure ────
+    db_file = None
+    try:
+        db_file = File(
             user_id=user.id,
-            file_id=db_file.id,
+            filename=unique_name,
+            original_filename=file.filename,
+            file_type=file_type,
+            file_path=file_path,
         )
+        db.add(db_file)
+        db.flush()  # gets db_file.id without committing yet
 
-    # ---------------- AUDIO / VIDEO PROCESSING ----------------
-    else:
-
-        # process_audio_video now returns:
-        #   segments       → List[Dict]  {text, start, end}   for DB rows
-        #   chunks_with_ts → List[Dict]  {text, start_seconds} for FAISS
-        #
-        # CRITICAL FIX: chunks_with_ts[i]["start_seconds"] is determined by
-        # matching chunk text back to the originating Whisper segment —
-        # NOT by positional index. This fixes wrong timestamps (e.g. 0:06
-        # being returned for "classification problem" instead of 1:44).
-        segments, chunks_with_ts = await process_audio_video(file_path)
-
-        # Save Whisper segments to DB (these power the sidebar timestamp list)
-        for i, seg in enumerate(segments):
-            ts = TranscriptSegment(
+        # ── PDF PROCESSING ────────────────────────────────────────────────────
+        if file_type == FileType.pdf:
+            chunks = process_pdf(file_path)
+            upsert_chunks(
+                chunks,
+                user_id=user.id,
                 file_id=db_file.id,
-                text=seg["text"],
-                start_seconds=seg["start"],
-                end_seconds=seg["end"],
-                segment_index=i,
             )
-            db.add(ts)
 
+        # ── AUDIO / VIDEO PROCESSING ──────────────────────────────────────────
+        else:
+            segments, chunks_with_ts = await process_audio_video(file_path)
+
+            for i, seg in enumerate(segments):
+                ts = TranscriptSegment(
+                    file_id=db_file.id,
+                    text=seg["text"],
+                    start_seconds=seg["start"],
+                    end_seconds=seg["end"],
+                    segment_index=i,
+                )
+                db.add(ts)
+
+            chunk_texts = [c["text"] for c in chunks_with_ts]
+            start_seconds_list = [c["start_seconds"] for c in chunks_with_ts]
+
+            upsert_chunks(
+                chunk_texts,
+                user_id=user.id,
+                file_id=db_file.id,
+                start_seconds_list=start_seconds_list,
+            )
+
+        # ── Commit ONLY after both DB rows and FAISS are written ──────────────
         db.commit()
+        db.refresh(db_file)
 
-        # Extract parallel lists for upsert_chunks
-        chunk_texts = [c["text"] for c in chunks_with_ts]
-        start_seconds_list = [c["start_seconds"] for c in chunks_with_ts]
-
-        # Store in FAISS — each chunk now has its correct matched timestamp
-        upsert_chunks(
-            chunk_texts,
-            user_id=user.id,
-            file_id=db_file.id,
-            start_seconds_list=start_seconds_list,
+    except Exception as exc:
+        # Roll back DB — no orphaned file row
+        db.rollback()
+        # Remove the file from disk — no orphaned file on disk
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        # Clean up any partial FAISS write for this file_id
+        if db_file and db_file.id:
+            try:
+                delete_user_file_index(user_id=user.id, file_id=db_file.id)
+            except Exception:
+                pass
+        raise HTTPException(
+            status_code=500,
+            detail=f"Upload failed: {str(exc)}",
         )
 
     return db_file
@@ -331,6 +335,7 @@ def delete_file(
     file_id: int,
     current_user: User = Depends(get_current_user_dep),
     db: Session = Depends(get_db),
+    redis=Depends(get_redis),
 ):
     db_file = (
         db.query(File)
@@ -344,13 +349,20 @@ def delete_file(
     if not db_file:
         raise HTTPException(404, "File not found")
 
-    if os.path.exists(db_file.file_path):
-        os.remove(db_file.file_path)
-
+    # 1. Remove FAISS embeddings first (no API calls — uses reconstruct)
     delete_user_file_index(
         user_id=current_user.id,
         file_id=file_id,
     )
 
+    # 2. Invalidate summary cache
+    if redis:
+        redis.delete(f"summary:{file_id}")
+
+    # 3. Remove physical file from disk
+    if os.path.exists(db_file.file_path):
+        os.remove(db_file.file_path)
+
+    # 4. DB delete cascades TranscriptSegments and ChatMessages via FK
     db.delete(db_file)
     db.commit()

@@ -21,7 +21,7 @@ export class AuthService {
   ) {
     this.isBrowser = isPlatformBrowser(platformId);
     if (this.isBrowser) {
-      this.token = localStorage.getItem(TOKEN_KEY);  // ← localStorage persists refresh
+      this.token = localStorage.getItem(TOKEN_KEY);
       this.isAuthenticated.set(!!this.token);
     }
   }
@@ -37,7 +37,7 @@ export class AuthService {
         tap((res) => {
           this.token = res.access_token;
           if (this.isBrowser) {
-            localStorage.setItem(TOKEN_KEY, this.token);  // ← localStorage
+            localStorage.setItem(TOKEN_KEY, this.token);
           }
           this.isAuthenticated.set(true);
         })
@@ -47,14 +47,13 @@ export class AuthService {
   logout(): void {
     this.token = null;
     if (this.isBrowser) {
-      localStorage.removeItem(TOKEN_KEY);  // ← localStorage
+      localStorage.removeItem(TOKEN_KEY);
     }
     this.isAuthenticated.set(false);
     this.router.navigate(['/login']);
   }
 
   getToken(): string | null {
-    // Re-read from localStorage in case token was set in another tab
     if (this.isBrowser && !this.token) {
       this.token = localStorage.getItem(TOKEN_KEY);
     }

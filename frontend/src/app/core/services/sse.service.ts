@@ -1,18 +1,20 @@
 import { Injectable } from '@angular/core';
 import { AuthService } from './auth.service';
 import { Observable } from 'rxjs';
-
-const API = 'http://localhost:8001';
+import { environment } from '../../../../environments/environment';
 
 export interface SSEEvent {
-  type: 'session' | 'token' | 'timestamp' | 'done';
+  type: 'session' | 'token' | 'timestamp' | 'done' | 'error';
   content?: string;
   value?: number;
   session_id?: number;
+  message?: string;
 }
 
 @Injectable({ providedIn: 'root' })
 export class SseService {
+  private readonly api = environment.apiUrl;
+
   constructor(private auth: AuthService) {}
 
   askQuestion(fileId: number, question: string, sessionId?: number): Observable<SSEEvent> {
@@ -20,7 +22,7 @@ export class SseService {
       const token = this.auth.getToken();
       let buffer = '';
 
-      fetch(`${API}/chat/ask`, {
+      fetch(`${this.api}/chat/ask`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -34,7 +36,17 @@ export class SseService {
       })
         .then((response) => {
           if (!response.ok) {
-            observer.error(new Error(`HTTP ${response.status}`));
+            // Emit a structured error event so the UI can display a message
+            observer.next({
+              type: 'error',
+              message:
+                response.status === 429
+                  ? 'Rate limit reached. Please wait a minute before asking again.'
+                  : response.status === 401
+                  ? 'Session expired. Please log in again.'
+                  : `Server error (${response.status}). Please try again.`,
+            });
+            observer.complete();
             return;
           }
           const reader = response.body!.getReader();
@@ -68,11 +80,17 @@ export class SseService {
                 }
               }
               read();
-            }).catch((err) => observer.error(err));
+            }).catch((err) => {
+              observer.next({ type: 'error', message: 'Connection lost. Please try again.' });
+              observer.complete();
+            });
           };
           read();
         })
-        .catch((err) => observer.error(err));
+        .catch((err) => {
+          observer.next({ type: 'error', message: 'Could not reach the server. Please check your connection.' });
+          observer.complete();
+        });
     });
   }
 }

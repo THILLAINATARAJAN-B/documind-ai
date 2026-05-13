@@ -1,4 +1,5 @@
 from pydantic import BaseModel, EmailStr, ConfigDict
+from typing import Optional
 
 
 class RegisterRequest(BaseModel):
@@ -14,6 +15,13 @@ class LoginRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    refresh_token: Optional[str] = None
+
+
+class RefreshRequest(BaseModel):
+    user_id: int
+    refresh_token: str
+
 
 class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)

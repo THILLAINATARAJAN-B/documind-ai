@@ -28,20 +28,6 @@ def _find_best_timestamp(
     fallback_ts: float,
     question: str = "",
 ) -> float:
-    """
-    Find the most relevant timestamp by scoring each TranscriptSegment against
-    both the GPT answer text and the original question.
-
-    Scoring strategy:
-    - Base score:  count answer words (>4 chars) found in segment text
-    - Bonus score: count question keywords (>2 chars, non-stopword) found in segment,
-                   weighted 2x — question terms are more specific than answer paraphrasing
-
-    This fixes cases like "regression" where GPT mentions "linear regression" (1:11)
-    AND "regression problem" (1:50) — the question word "regression" boosts 1:50
-    because the segment at 1:50 contains "regression problem" which directly answers
-    the question, while 1:11 only mentions it as an algorithm type.
-    """
     if not segments or not answer_text:
         return fallback_ts
 
@@ -54,14 +40,12 @@ def _find_best_timestamp(
         "for", "can", "how", "does", "did", "its", "and", "not"
     }
 
-    # Answer words: meaningful words longer than 4 chars
     answer_words = [
         w.strip(".,;:!?()\"'")
         for w in answer_lower.split()
         if len(w.strip(".,;:!?()\"'")) > 4
     ]
 
-    # Question keywords: all non-stopwords longer than 2 chars
     question_words = [
         w.strip(".,;:!?()\"'")
         for w in question_lower.split()
@@ -72,20 +56,26 @@ def _find_best_timestamp(
     if not answer_words and not question_words:
         return fallback_ts
 
-    best_score = 0
-    best_ts = fallback_ts
+    scored: List[tuple] = []  # (score, start_seconds)
 
     for seg in segments:
         seg_lower = seg.text.lower()
-        # Base score from answer text
         score = sum(1 for w in answer_words if w in seg_lower)
-        # 2x bonus from question keywords (more specific signal)
         score += sum(2 for w in question_words if w in seg_lower)
-        if score > best_score:
-            best_score = score
-            best_ts = seg.start_seconds
+        if score > 0:
+            scored.append((score, seg.start_seconds))
 
-    return best_ts
+    if not scored:
+        return fallback_ts
+
+    max_score = max(s for s, _ in scored)
+
+    # Among all segments within 80% of the top score, pick the earliest
+    # This prefers where the topic is INTRODUCED over where it's elaborated
+    threshold = max_score * 0.8
+    candidates = [ts for score, ts in scored if score >= threshold]
+
+    return min(candidates)  # earliest timestamp among top scorers
 
 
 async def stream_answer(

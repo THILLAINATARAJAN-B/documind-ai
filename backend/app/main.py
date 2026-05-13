@@ -1,17 +1,34 @@
+# backend/app/main.py
+import time
+import asyncio
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+
+from app.core.config import settings
 from app.core.database import engine, Base
 from app.routers import auth, upload, chat
 
-settings = get_settings()
+def create_tables_with_retry(retries: int = 10, delay: float = 2.0):
+    for attempt in range(retries):
+        try:
+            Base.metadata.create_all(bind=engine)
+            print("✅ Database tables created/verified")
+            return
+        except Exception as e:
+            print(f"⏳ DB not ready (attempt {attempt+1}/{retries}): {e}")
+            time.sleep(delay)
+    raise RuntimeError("❌ Could not connect to database after retries")
 
-# Create all database tables on startup
-Base.metadata.create_all(bind=engine)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    create_tables_with_retry()
+    yield
 
 app = FastAPI(
     title="DocuMind AI",
-    description="AI-powered Document & Multimedia Q&A API",
-    version="1.0.0",
+    lifespan=lifespan
 )
 
 app.add_middleware(

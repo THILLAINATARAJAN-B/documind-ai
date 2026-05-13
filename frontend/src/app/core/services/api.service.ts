@@ -1,8 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
-
-const API = 'http://localhost:8001';
+import { environment } from '../../../../environments/environment';
 
 export interface FileItem {
   id: number;
@@ -27,33 +26,35 @@ export interface SummaryResponse {
 
 @Injectable({ providedIn: 'root' })
 export class ApiService {
+  private readonly api = environment.apiUrl;
+
   constructor(private http: HttpClient) {}
 
   uploadPdf(file: File): Observable<FileItem> {
     const fd = new FormData();
     fd.append('file', file);
-    return this.http.post<FileItem>(`${API}/upload/pdf`, fd);
+    return this.http.post<FileItem>(`${this.api}/upload/pdf`, fd);
   }
 
   uploadAudio(file: File): Observable<FileItem> {
     const fd = new FormData();
     fd.append('file', file);
-    return this.http.post<FileItem>(`${API}/upload/audio`, fd);
+    return this.http.post<FileItem>(`${this.api}/upload/audio`, fd);
   }
 
   getFiles(): Observable<FileItem[]> {
-    return this.http.get<FileItem[]>(`${API}/upload/files`);
+    return this.http.get<FileItem[]>(`${this.api}/upload/files`);
   }
 
   deleteFile(fileId: number): Observable<void> {
-    return this.http.delete<void>(`${API}/upload/files/${fileId}`);
+    return this.http.delete<void>(`${this.api}/upload/files/${fileId}`);
   }
 
   getSegments(fileId: number): Observable<TranscriptSegment[]> {
-    return this.http.get<TranscriptSegment[]>(`${API}/upload/files/${fileId}/segments`);
+    return this.http.get<TranscriptSegment[]>(`${this.api}/upload/files/${fileId}/segments`);
   }
 
   getSummary(fileId: number): Observable<SummaryResponse> {
-    return this.http.get<SummaryResponse>(`${API}/upload/files/${fileId}/summary`);
+    return this.http.get<SummaryResponse>(`${this.api}/upload/files/${fileId}/summary`);
   }
 }

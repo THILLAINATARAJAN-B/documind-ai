@@ -5,15 +5,41 @@ import {
   HttpEventType,
   HttpResponse,
 } from '@angular/common/http';
-import { Observable, Subject } from 'rxjs';
-import { filter, map } from 'rxjs/operators';
+import { Observable } from 'rxjs';
 import { environment } from '../../../environments/environment';
+
+// ── Shared interfaces exported for use in components ──────────────────────────
+
+export interface FileItem {
+  id: number;
+  filename: string;
+  original_filename: string;
+  file_type: 'pdf' | 'audio' | 'video';
+  uploaded_at: string;
+}
+
+export interface TranscriptSegment {
+  id: number;
+  file_id: number;
+  text: string;
+  start_seconds: number;
+  end_seconds: number;
+  segment_index: number;
+}
+
+export interface SummaryResponse {
+  file_id: number;
+  summary: string;
+  cached: boolean;
+}
 
 export interface UploadProgress {
   percent: number;
   done: boolean;
-  response?: any;
+  response?: FileItem;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 @Injectable({ providedIn: 'root' })
 export class ApiService {
@@ -23,7 +49,10 @@ export class ApiService {
 
   // ── Auth ────────────────────────────────────────────────────────────────────
   login(email: string, password: string) {
-    return this.http.post(`${this.api}/auth/login`, { email, password });
+    return this.http.post<{ access_token: string; refresh_token: string }>(
+      `${this.api}/auth/login`,
+      { email, password }
+    );
   }
 
   register(email: string, password: string) {
@@ -38,15 +67,15 @@ export class ApiService {
   }
 
   refreshToken(userId: number, refreshToken: string) {
-    return this.http.post(`${this.api}/auth/refresh`, {
-      user_id: userId,
-      refresh_token: refreshToken,
-    });
+    return this.http.post<{ access_token: string; refresh_token: string }>(
+      `${this.api}/auth/refresh`,
+      { user_id: userId, refresh_token: refreshToken }
+    );
   }
 
   // ── Files ───────────────────────────────────────────────────────────────────
-  getFiles(limit = 50, offset = 0) {
-    return this.http.get(
+  getFiles(limit = 50, offset = 0): Observable<FileItem[]> {
+    return this.http.get<FileItem[]>(
       `${this.api}/upload/files?limit=${limit}&offset=${offset}`
     );
   }
@@ -55,12 +84,18 @@ export class ApiService {
     return this.http.delete(`${this.api}/upload/files/${fileId}`);
   }
 
-  getFileSummary(fileId: number) {
-    return this.http.get(`${this.api}/upload/files/${fileId}/summary`);
+  // Alias used by dashboard.component
+  getSummary(fileId: number): Observable<SummaryResponse> {
+    return this.http.get<SummaryResponse>(
+      `${this.api}/upload/files/${fileId}/summary`
+    );
   }
 
-  getTranscriptSegments(fileId: number) {
-    return this.http.get(`${this.api}/upload/files/${fileId}/segments`);
+  // Alias used by chat.component
+  getSegments(fileId: number): Observable<TranscriptSegment[]> {
+    return this.http.get<TranscriptSegment[]>(
+      `${this.api}/upload/files/${fileId}/segments`
+    );
   }
 
   // ── Upload with progress ────────────────────────────────────────────────────
@@ -92,7 +127,11 @@ export class ApiService {
               : 0;
             observer.next({ percent, done: false });
           } else if (event instanceof HttpResponse) {
-            observer.next({ percent: 100, done: true, response: event.body });
+            observer.next({
+              percent: 100,
+              done: true,
+              response: event.body as FileItem,
+            });
             observer.complete();
           }
         },

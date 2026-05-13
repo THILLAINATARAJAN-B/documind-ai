@@ -56,7 +56,7 @@ def _find_best_timestamp(
     if not answer_words and not question_words:
         return fallback_ts
 
-    scored: List[tuple] = []  # (score, start_seconds)
+    scored: List[tuple] = []
 
     for seg in segments:
         seg_lower = seg.text.lower()
@@ -69,13 +69,9 @@ def _find_best_timestamp(
         return fallback_ts
 
     max_score = max(s for s, _ in scored)
-
-    # Among all segments within 80% of the top score, pick the earliest
-    # This prefers where the topic is INTRODUCED over where it's elaborated
     threshold = max_score * 0.8
     candidates = [ts for score, ts in scored if score >= threshold]
-
-    return min(candidates)  # earliest timestamp among top scorers
+    return min(candidates)
 
 
 async def stream_answer(
@@ -85,17 +81,26 @@ async def stream_answer(
     file_type: FileType,
     db: Session,
 ) -> AsyncGenerator[Dict, None]:
-    """Stream GPT-4o answer using RAG. Yields dicts with type=token|timestamp|error."""
+    """Stream GPT-4o answer using RAG. Always ends with type=done."""
+
+    # ── done is ALWAYS yielded — even on early errors ─────────────────────────
+    error_occurred = False
 
     try:
-        chunk_results: List[Dict] = search_chunks(
-            query=question, user_id=user_id, file_id=file_id, top_k=5
-        )
+        # ── 1. Semantic search ────────────────────────────────────────────────
+        try:
+            chunk_results: List[Dict] = search_chunks(
+                query=question, user_id=user_id, file_id=file_id, top_k=5
+            )
+        except Exception as e:
+            logger.error("FAISS search failed: %s", e)
+            yield {"type": "error", "content": "Failed to search document. Please try again."}
+            error_occurred = True
+            return
 
         context_texts = [c["text"] for c in chunk_results] if chunk_results else []
         context = "\n\n".join(context_texts) if context_texts else "No relevant context found."
 
-        # Fallback: start_seconds of the top FAISS chunk
         faiss_fallback_ts: float = 0.0
         if file_type in [FileType.audio, FileType.video] and chunk_results:
             for chunk in chunk_results:
@@ -117,51 +122,74 @@ async def stream_answer(
             },
         ]
 
-        stream = await client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            stream=True,
-            temperature=0.3,
-            max_tokens=800,
-        )
+        # ── 2. OpenAI streaming ───────────────────────────────────────────────
+        try:
+            stream = await client.chat.completions.create(
+                model="gpt-4o",
+                messages=messages,
+                stream=True,
+                temperature=0.3,
+                max_tokens=800,
+            )
+        except RateLimitError:
+            logger.error("OpenAI rate limit hit")
+            yield {"type": "error", "content": "Rate limit reached. Please wait a moment and try again."}
+            error_occurred = True
+            return
+        except APIConnectionError:
+            logger.error("OpenAI connection error")
+            yield {"type": "error", "content": "Could not connect to AI service. Check your connection."}
+            error_occurred = True
+            return
+        except APIError as e:
+            logger.error("OpenAI API error: %s", e)
+            yield {"type": "error", "content": "AI service error. Please try again."}
+            error_occurred = True
+            return
 
-        # Stream tokens to frontend while collecting full answer
+        # ── 3. Stream tokens — catch mid-stream errors separately ─────────────
         full_answer = ""
-        async for chunk in stream:
-            delta = chunk.choices[0].delta
-            if delta.content:
-                full_answer += delta.content
-                yield {"type": "token", "content": delta.content}
+        try:
+            async for chunk in stream:
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    full_answer += delta.content
+                    yield {"type": "token", "content": delta.content}
+        except Exception as e:
+            logger.error("Mid-stream error: %s", e)
+            # Partial answer already sent — append error notice rather than blank
+            yield {"type": "error", "content": "Stream interrupted. The answer above may be incomplete."}
+            error_occurred = True
+            return
 
-        # After streaming completes, find the best timestamp
-        # Pass question= so question keywords get 2x weight in scoring
+        # ── 4. Timestamp (audio/video only) ───────────────────────────────────
         if file_type in [FileType.audio, FileType.video]:
-            segments = (
-                db.query(TranscriptSegment)
-                .filter(TranscriptSegment.file_id == file_id)
-                .order_by(TranscriptSegment.segment_index)
-                .all()
-            )
-            best_ts = _find_best_timestamp(
-                answer_text=full_answer,
-                segments=segments,
-                fallback_ts=faiss_fallback_ts,
-                question=question,          # ← THIS WAS MISSING IN YOUR CODE
-            )
-            yield {"type": "timestamp", "value": best_ts}
+            try:
+                segments = (
+                    db.query(TranscriptSegment)
+                    .filter(TranscriptSegment.file_id == file_id)
+                    .order_by(TranscriptSegment.segment_index)
+                    .all()
+                )
+                best_ts = _find_best_timestamp(
+                    answer_text=full_answer,
+                    segments=segments,
+                    fallback_ts=faiss_fallback_ts,
+                    question=question,
+                )
+                yield {"type": "timestamp", "value": best_ts}
+            except Exception as e:
+                logger.error("Timestamp resolution failed: %s", e)
+                # Non-fatal — skip timestamp, don't break the stream
 
-    except RateLimitError:
-        logger.error("OpenAI rate limit hit")
-        yield {"type": "error", "content": "OpenAI rate limit reached. Please wait a moment and try again."}
-    except APIConnectionError:
-        logger.error("OpenAI connection error")
-        yield {"type": "error", "content": "Could not connect to AI service. Please check your connection."}
-    except APIError as e:
-        logger.error(f"OpenAI API error: {e}")
-        yield {"type": "error", "content": "AI service returned an error. Please try again."}
     except Exception as e:
-        logger.error(f"Unexpected error in stream_answer: {e}")
+        logger.error("Unexpected error in stream_answer: %s", e, exc_info=True)
         yield {"type": "error", "content": "An unexpected error occurred. Please try again."}
+        error_occurred = True
+
+    finally:
+        # ── GUARANTEED: done is always the last event sent ────────────────────
+        yield {"type": "done"}
 
 
 async def summarize_file(file_id: int, user_id: int, db: Session) -> str:
@@ -185,7 +213,7 @@ async def summarize_file(file_id: int, user_id: int, db: Session) -> str:
     batch_size = 10
     partial_summaries = []
     for i in range(0, len(file_chunks), batch_size):
-        batch = file_chunks[i : i + batch_size]
+        batch = file_chunks[i: i + batch_size]
         batch_text = "\n\n".join(batch)
         try:
             resp = await client.chat.completions.create(
@@ -202,7 +230,7 @@ async def summarize_file(file_id: int, user_id: int, db: Session) -> str:
             )
             partial_summaries.append(resp.choices[0].message.content)
         except Exception as e:
-            logger.error(f"Summarize batch error: {e}")
+            logger.error("Summarize batch error: %s", e)
             partial_summaries.append("[Summary unavailable for this section]")
 
     if len(partial_summaries) == 1:
@@ -224,5 +252,5 @@ async def summarize_file(file_id: int, user_id: int, db: Session) -> str:
         )
         return final_resp.choices[0].message.content
     except Exception as e:
-        logger.error(f"Summarize reduce error: {e}")
+        logger.error("Summarize reduce error: %s", e)
         return "\n\n".join(partial_summaries)

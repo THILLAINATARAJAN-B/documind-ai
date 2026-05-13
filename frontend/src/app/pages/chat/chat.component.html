@@ -30,7 +30,13 @@
 
     <!-- Media Player (audio/video only) -->
     <div class="player-bar" *ngIf="isMediaFile()">
-      <audio #mediaPlayer controls class="media-player">
+      <audio
+        #mediaPlayer
+        controls
+        class="media-player"
+        [src]="audioSrc"
+        preload="metadata"
+      >
         Your browser does not support audio playback.
       </audio>
     </div>

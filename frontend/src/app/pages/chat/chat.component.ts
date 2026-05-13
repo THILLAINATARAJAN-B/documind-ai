@@ -28,7 +28,7 @@ interface Message {
 })
 export class ChatComponent implements OnInit, OnDestroy, AfterViewChecked {
   @ViewChild('messagesEnd') messagesEnd!: ElementRef;
-  @ViewChild('mediaPlayer') mediaPlayer!: ElementRef<HTMLAudioElement | HTMLVideoElement>;
+  @ViewChild('mediaPlayer') mediaPlayer!: ElementRef<HTMLAudioElement>;
 
   fileId!: number;
   fileInfo: FileItem | null = null;
@@ -38,6 +38,7 @@ export class ChatComponent implements OnInit, OnDestroy, AfterViewChecked {
   sessionId: number | null = null;
   isStreaming = false;
   error = '';
+  audioSrc = '';  // pre-computed once in ngOnInit; stable reference for <audio [src]>
   private sub?: Subscription;
   private shouldScroll = false;
 
@@ -52,6 +53,12 @@ export class ChatComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   ngOnInit(): void {
     this.fileId = Number(this.route.snapshot.paramMap.get('fileId'));
+
+    // Build src ONCE here — stable string prevents the <audio> element
+    // from reloading on every change detection cycle.
+    const token = this.auth.getToken();
+    this.audioSrc = `${environment.apiUrl}/upload/files/${this.fileId}/stream?token=${token}`;
+
     this.api.getFiles().subscribe((files) => {
       this.fileInfo = files.find((f) => f.id === this.fileId) || null;
       this.cdr.detectChanges();
@@ -91,7 +98,7 @@ export class ChatComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.cdr.detectChanges();
 
     this.sub = this.sse.askQuestion(this.fileId, q, this.sessionId ?? undefined).subscribe({
-      next: (event) => {
+      next: (event: any) => {
         if (event.type === 'session' && event.session_id) {
           this.sessionId = event.session_id;
         } else if (event.type === 'token' && event.content) {
@@ -124,10 +131,12 @@ export class ChatComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   playTimestamp(seconds: number): void {
     const el = this.mediaPlayer?.nativeElement;
-    if (el) {
-      el.currentTime = seconds;
-      (el as HTMLAudioElement).play();
+    if (!el) {
+      console.warn('mediaPlayer ViewChild not found — audio element may not be in DOM yet');
+      return;
     }
+    el.currentTime = seconds;
+    el.play().catch((err) => console.error('Audio play() failed:', err));
   }
 
   formatTime(seconds: number): string {
@@ -138,11 +147,6 @@ export class ChatComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   isMediaFile(): boolean {
     return this.fileInfo?.file_type !== 'pdf';
-  }
-
-  getMediaSrc(): string {
-    const token = this.auth.getToken();
-    return `${environment.apiUrl}/upload/files/${this.fileId}/stream?token=${token}`;
   }
 
   goBack(): void {

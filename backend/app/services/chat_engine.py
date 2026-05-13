@@ -1,4 +1,4 @@
-from typing import AsyncGenerator, Dict
+from typing import AsyncGenerator, Dict, List, Optional
 from openai import AsyncOpenAI, APIError, APIConnectionError, RateLimitError
 from sqlalchemy.orm import Session
 from app.core.config import get_settings
@@ -19,10 +19,7 @@ Be helpful, concise, and accurate."""
 AUDIO_SYSTEM_PROMPT = """You are DocuMind AI. You answer questions based on a transcript of an audio/video file.
 Use the transcript context to answer fully. For follow-up questions or requests for examples, elaborate using what's in the transcript.
 Only say "I could not find that information" if the topic is completely absent from the transcript.
-When your answer references a specific moment, end your response with:
-TIMESTAMP: <seconds>
-where <seconds> is the start time of the most relevant segment. Omit if no specific moment applies.
-Be helpful and concise."""
+Be helpful and concise. Do NOT include any TIMESTAMP text in your response — timestamps are handled separately."""
 
 
 async def stream_answer(
@@ -35,22 +32,25 @@ async def stream_answer(
     """Stream GPT-4o answer using RAG. Yields dicts with type=token|timestamp|error."""
 
     try:
-        context_chunks = search_chunks(query=question, user_id=user_id, file_id=file_id, top_k=5)
-        context = "\n\n".join(context_chunks) if context_chunks else "No relevant context found."
+        # search_chunks now returns List[Dict] with keys: text, file_id, start_seconds (optional)
+        chunk_results: List[Dict] = search_chunks(
+            query=question, user_id=user_id, file_id=file_id, top_k=5
+        )
 
-        timestamp_map = {}
-        if file_type in [FileType.audio, FileType.video]:
-            segments = (
-                db.query(TranscriptSegment)
-                .filter(TranscriptSegment.file_id == file_id)
-                .order_by(TranscriptSegment.segment_index)
-                .all()
-            )
-            for seg in segments:
-                timestamp_map[seg.text[:60]] = seg.start_seconds
-            system_prompt = AUDIO_SYSTEM_PROMPT
-        else:
-            system_prompt = RAG_SYSTEM_PROMPT
+        # Extract text for context
+        context_texts = [c["text"] for c in chunk_results] if chunk_results else []
+        context = "\n\n".join(context_texts) if context_texts else "No relevant context found."
+
+        # For audio/video: grab timestamp from the MOST RELEVANT chunk (index 0 = best FAISS match)
+        # This is reliable because start_seconds is stored in FAISS metadata at upload time.
+        best_timestamp: Optional[float] = None
+        if file_type in [FileType.audio, FileType.video] and chunk_results:
+            for chunk in chunk_results:
+                if "start_seconds" in chunk:
+                    best_timestamp = chunk["start_seconds"]
+                    break  # first match = highest semantic similarity = correct timestamp
+
+        system_prompt = AUDIO_SYSTEM_PROMPT if file_type in [FileType.audio, FileType.video] else RAG_SYSTEM_PROMPT
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -68,22 +68,14 @@ async def stream_answer(
             max_tokens=800,
         )
 
-        full_content = ""
         async for chunk in stream:
             delta = chunk.choices[0].delta
             if delta.content:
-                full_content += delta.content
                 yield {"type": "token", "content": delta.content}
 
-        # Extract timestamp from response if audio/video
-        if file_type in [FileType.audio, FileType.video]:
-            if "TIMESTAMP:" in full_content:
-                try:
-                    ts_line = [line for line in full_content.split("\n") if "TIMESTAMP:" in line][0]
-                    ts_value = float(ts_line.split("TIMESTAMP:")[1].strip())
-                    yield {"type": "timestamp", "value": ts_value}
-                except (ValueError, IndexError):
-                    pass
+        # Emit timestamp AFTER streaming completes — sourced from FAISS metadata, not GPT text
+        if best_timestamp is not None:
+            yield {"type": "timestamp", "value": best_timestamp}
 
     except RateLimitError:
         logger.error("OpenAI rate limit hit")

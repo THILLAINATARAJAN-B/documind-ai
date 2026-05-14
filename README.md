@@ -4,25 +4,52 @@
 
 ### AI-Powered Document & Multimedia Q&A System
 
-[![CI/CD Pipeline](https://github.com/THILLAINATARAJAN-B/documind-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/THILLAINATARAJAN-B/documind-ai/actions/workflows/ci.yml)
-![Python](https://img.shields.io/badge/Python-3.11-blue?logo=python)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.136-009688?logo=fastapi)
-![Angular](https://img.shields.io/badge/Angular-21-DD0031?logo=angular)
-![Coverage](https://img.shields.io/badge/Coverage-96%25-brightgreen)
-![Tests](https://img.shields.io/badge/Tests-101%20passing-brightgreen)
-![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker)
+[
+
+
+
+
+
+
+
 
 Upload PDFs, audio, and video files — then ask intelligent questions about their content using GPT-4 with Retrieval-Augmented Generation (RAG).
 
 </div>
 
----
+***
+
+## 📸 Screenshots
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="Test/Screenshots/dashboard.png" alt="Dashboard — File Manager" width="100%"/>
+      <br/>
+      <sub><b>📁 Dashboard — Upload & manage your documents and media</b></sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="Test/Screenshots/pdf-chat.png" alt="PDF Chat Interface" width="100%"/>
+      <br/>
+      <sub><b>📄 PDF Chat — Ask questions about your PDF documents</b></sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <img src="Test/Screenshots/audio-video-chat.png" alt="Audio & Video Chat with Timestamps" width="75%"/>
+      <br/>
+      <sub><b>🎵 Audio / Video Chat — Answers linked to exact timestamps in the media</b></sub>
+    </td>
+  </tr>
+</table>
+
+***
 
 ## 📌 Overview
 
-DocuMind AI lets users upload documents and media, then have natural language conversations about their content. The backend extracts text and transcripts, builds a semantic vector index with FAISS, and streams GPT-4 answers back in real time via Server-Sent Events (SSE). Audio and video answers include exact timestamp references to the source moment in the file.
+DocuMind AI lets users upload documents and media, then have natural language conversations about their content. The backend extracts text and transcripts, builds a semantic vector index with FAISS, and streams GPT-4 answers back in real time via Server-Sent Events (SSE). Audio and video answers include exact **timestamp references** back to the source moment in the file.
 
----
+***
 
 ## ✨ Features
 
@@ -38,7 +65,7 @@ DocuMind AI lets users upload documents and media, then have natural language co
 | 🚦 **Rate Limiting** | Redis-backed per-user request throttling |
 | 📦 **Docker Compose** | One-command local deployment with Postgres + Redis + backend |
 
----
+***
 
 ## 🏗️ Architecture
 
@@ -59,7 +86,7 @@ DocuMind AI lets users upload documents and media, then have natural language co
 │                           │                  │           │
 │  ┌────────────────────────▼──────────────────▼────────┐ │
 │  │               Services Layer                        │ │
-│  │  PdfProcessor │ AudioProcessor │ ChatEngine        │ │
+│  │  PdfProcessor │ AudioProcessor │ ChatEngine         │ │
 │  │  Embeddings (FAISS) │ Security (JWT/bcrypt)         │ │
 │  └────────────┬─────────────────────────┬─────────────┘ │
 └───────────────┼─────────────────────────┼───────────────┘
@@ -72,7 +99,7 @@ DocuMind AI lets users upload documents and media, then have natural language co
    └───────────────────┘       └─────────────────────┘
 ```
 
----
+***
 
 ## 🛠️ Tech Stack
 
@@ -105,7 +132,7 @@ DocuMind AI lets users upload documents and media, then have natural language co
 | Streaming | Server-Sent Events (SSE) |
 | Web Server | Express.js 5 (SSR runtime) |
 
----
+***
 
 ## 🚀 Quick Start
 
@@ -154,7 +181,7 @@ docker-compose up --build
 | API Docs (Swagger) | http://localhost:8001/docs |
 | Frontend | http://localhost:4200 |
 
----
+***
 
 ## 🔧 Local Development (Without Docker)
 
@@ -190,7 +217,7 @@ npm start
 # Runs on http://localhost:4200
 ```
 
----
+***
 
 ## 🧪 Testing
 
@@ -210,17 +237,29 @@ python -m pytest tests/ --cov=app --cov-report=html
 ### Coverage Summary
 
 ```
-TOTAL     750+ stmts    96% coverage
-──────────────────────────────────────
-app/core/           100%
-app/models/         100%
-app/routers/        94–100%
-app/services/       87–98%
+Name                              Stmts   Miss  Cover
+-------------------------------------------------------
+app/core/__init__.py                  1      0   100%
+app/core/config.py                   21      0   100%
+app/core/database.py                 13      0   100%
+app/core/redis_client.py             12      1    92%
+app/core/security.py                 26      1    96%
+app/main.py                          32      5    84%
+app/models/models.py                 59      0   100%
+app/routers/auth.py                  57      1    98%
+app/routers/chat.py                  68      0   100%
+app/routers/upload.py               158     11    93%
+app/services/audio_processor.py      52      7    87%
+app/services/chat_engine.py          96      2    98%
+app/services/embeddings.py           91      5    95%
+app/services/pdf_processor.py        14      0   100%
+-------------------------------------------------------
+TOTAL                               750     33    96%
 ```
 
 **101 tests** across 4 test files covering authentication, file upload, chat streaming, service logic, and edge cases.
 
----
+***
 
 ## 📡 API Reference
 
@@ -260,30 +299,32 @@ app/services/       87–98%
 
 Full interactive docs available at **`/docs`** (Swagger UI) and **`/redoc`**.
 
----
+***
 
 ## 🗄️ Database Schema
 
 ```
-users              files                  chat_sessions
-──────────         ──────────────────     ─────────────────
-id (PK)            id (PK)                id (PK)
-email (UNIQUE)     user_id (FK)           user_id (FK)
-hashed_password    filename               created_at
-created_at         original_filename
-                   file_type              chat_messages
-transcript_        file_path              ─────────────────
-segments           uploaded_at            id (PK)
-──────────────                            session_id (FK)
-id (PK)                                   file_id (FK)
-file_id (FK)                              role (user|assistant)
-text                                      content
-start_seconds                             timestamp_ref
-end_seconds                               created_at
+users                  files                    chat_sessions
+─────────────          ──────────────────────   ─────────────────────
+id (PK)                id (PK)                  id (PK)
+email (UNIQUE)         user_id (FK → users)     user_id (FK → users)
+hashed_password        filename                 created_at
+created_at             original_filename
+                       file_type                chat_messages
+                       file_path                ─────────────────────
+                       uploaded_at              id (PK)
+                                                session_id (FK)
+transcript_segments                             file_id (FK)
+─────────────────────                           role (user|assistant)
+id (PK)                                         content
+file_id (FK → files)                            timestamp_ref
+text                                            created_at
+start_seconds
+end_seconds
 segment_index
 ```
 
----
+***
 
 ## 🐳 Docker Services
 
@@ -302,77 +343,98 @@ network:
   documind_net (bridge) → internal service communication
 ```
 
----
+***
 
 ## ⚙️ CI/CD Pipeline
 
 The GitHub Actions pipeline runs on every push to `main` and `develop`:
 
 ```
-push to main
-     │
-     ▼
-┌─────────────────────┐
-│   test-backend      │  Python 3.11, pytest, ruff lint
-│   ✅ 101 tests      │  96% coverage, --cov-fail-under=95
-│   ✅ Lint (ruff)    │
-└──────────┬──────────┘
-           │ (on main only)
-           ▼
-┌─────────────────────┐
-│   build-docker      │  docker build backend + frontend
-│   ✅ Image builds   │
-└─────────────────────┘
+push to main / develop
+        │
+        ▼
+┌─────────────────────────────┐
+│       test-backend          │
+│  ✅ Python 3.11 setup       │
+│  ✅ 101 tests passing       │  ← pytest, ruff lint
+│  ✅ 96% coverage            │  ← --cov-fail-under=95
+└──────────────┬──────────────┘
+               │  (on main only)
+               ▼
+┌─────────────────────────────┐
+│       build-docker          │
+│  ✅ Backend image builds    │
+│  ✅ Frontend image builds   │
+└─────────────────────────────┘
 ```
 
----
+***
 
 ## 📁 Project Structure
 
 ```
 documind-ai/
-├── .github/workflows/ci.yml    # CI/CD pipeline
+├── .github/
+│   └── workflows/
+│       └── ci.yml              # CI/CD pipeline (test + build)
 ├── docker-compose.yml          # Multi-service orchestration
 ├── .env                        # Environment variables (not committed)
+├── README.md
 │
-├── backend/                    # FastAPI + RAG system
+├── backend/                    # FastAPI + RAG backend
 │   ├── Dockerfile
 │   ├── requirements.txt
-│   ├── app/
-│   │   ├── main.py             # App entry point
-│   │   ├── core/               # Config, DB, Redis, Security
-│   │   ├── models/             # SQLAlchemy ORM models
-│   │   ├── routers/            # API route handlers
-│   │   ├── schemas/            # Pydantic request/response models
-│   │   └── services/           # RAG, FAISS, PDF, Audio processors
-│   └── tests/                  # 101 tests, 96% coverage
+│   └── app/
+│       ├── main.py             # App entry point & lifespan
+│       ├── core/
+│       │   ├── config.py       # Pydantic settings
+│       │   ├── database.py     # SQLAlchemy engine & session
+│       │   ├── redis_client.py # Redis connection
+│       │   └── security.py     # JWT & bcrypt utilities
+│       ├── models/
+│       │   └── models.py       # ORM models (User, File, Chat...)
+│       ├── routers/
+│       │   ├── auth.py         # /auth/* endpoints
+│       │   ├── chat.py         # /chat/* endpoints (SSE streaming)
+│       │   ├── upload.py       # /upload/* endpoints
+│       │   └── deps.py         # Shared FastAPI dependencies
+│       ├── schemas/
+│       │   ├── auth.py         # Auth request/response models
+│       │   ├── chat.py         # Chat request/response models
+│       │   └── file.py         # File response models
+│       └── services/
+│           ├── audio_processor.py  # Whisper transcription
+│           ├── chat_engine.py      # GPT-4 RAG + streaming
+│           ├── embeddings.py       # FAISS index management
+│           └── pdf_processor.py    # PyMuPDF text extraction
 │
 └── frontend/                   # Angular 21 SSR app
     ├── Dockerfile
-    └── src/app/
-        ├── core/               # Auth guard, interceptors, services
-        └── pages/              # Login, Register, Dashboard, Chat
+    └── src/
+        └── app/
+            ├── core/           # Auth guard, HTTP interceptors, services
+            └── pages/          # Login, Register, Dashboard, Chat
 ```
 
----
+***
 
 ## 🔐 Security
 
-- Passwords hashed with **bcrypt**
-- Stateless auth via **JWT access tokens** (60 min expiry)
-- **Refresh tokens** stored in Redis with rotation
+- Passwords hashed with **bcrypt** (salted, work factor 12)
+- Stateless auth via **JWT access tokens** (60-minute expiry)
+- **Refresh tokens** stored in Redis with rotation on each use
 - **CORS** configured for allowed origins only
-- **Rate limiting** on chat endpoints (Redis-backed)
-- **Magic byte validation** on all file uploads (rejects spoofed MIME types)
-- **File size limits** enforced server-side
+- **Rate limiting** on chat endpoints (Redis-backed sliding window)
+- **Magic byte validation** on all file uploads — rejects files with spoofed MIME types
+- **File size limits** enforced server-side before any processing begins
 
----
+***
 
 ## 📄 License
 
-This project is licensed under the MIT License.
+This project is licensed under the [MIT License](LICENSE).
 
----
+***
 
 <div align="center">
 Built with ❤️ using FastAPI, Angular, and OpenAI

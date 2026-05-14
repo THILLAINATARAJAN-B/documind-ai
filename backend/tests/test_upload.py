@@ -201,10 +201,10 @@ def test_upload_pdf_too_large(mock_upsert, mock_process, client, auth_headers):
     assert "exceeds" in response.json()["detail"]
 
 
-# ── NEW: magic-byte validation failures ──────────────────────────────────────
+# ── magic-byte validation failures ───────────────────────────────────────────
 
 def test_upload_pdf_invalid_magic_bytes(client, auth_headers):
-    """PDF with wrong magic bytes → 400 (line 88)."""
+    """PDF with wrong magic bytes → 400."""
     response = client.post(
         "/upload/pdf",
         files={"file": ("fake.pdf", io.BytesIO(b"NOTAPDF content here"), "application/pdf")},
@@ -215,7 +215,7 @@ def test_upload_pdf_invalid_magic_bytes(client, auth_headers):
 
 
 def test_upload_audio_wrong_content_type(client, auth_headers):
-    """audio upload with disallowed content-type → 400 (line 112)."""
+    """audio upload with disallowed content-type → 400."""
     response = client.post(
         "/upload/audio",
         files={"file": ("test.txt", io.BytesIO(b"notaudio"), "text/plain")},
@@ -225,7 +225,7 @@ def test_upload_audio_wrong_content_type(client, auth_headers):
 
 
 def test_upload_audio_invalid_magic_bytes(client, auth_headers):
-    """audio with correct content-type but wrong magic bytes → 400 (line 112 magic check)."""
+    """audio with correct content-type but wrong magic bytes → 400."""
     response = client.post(
         "/upload/audio",
         files={"file": ("bad.mp3", io.BytesIO(b"NOTAUDIO" * 20), "audio/mpeg")},
@@ -238,7 +238,7 @@ def test_upload_audio_invalid_magic_bytes(client, auth_headers):
 @patch("app.routers.upload.process_pdf", side_effect=RuntimeError("pdf parse boom"))
 @patch("app.routers.upload.upsert_chunks", return_value=None)
 def test_upload_pdf_process_failure_rolls_back(mock_upsert, mock_process, client, auth_headers):
-    """Exception inside _save_and_process triggers rollback + 500 (lines 227-237)."""
+    """Exception inside _save_and_process triggers rollback + 500."""
     response = client.post(
         "/upload/pdf",
         files={"file": ("fail.pdf", io.BytesIO(b"%PDF-1.4 content"), "application/pdf")},
@@ -248,23 +248,22 @@ def test_upload_pdf_process_failure_rolls_back(mock_upsert, mock_process, client
     assert "Upload failed" in response.json()["detail"]
 
 
-# ── NEW: /files/{id}/stream endpoint (lines 265-297) ─────────────────────────
+# ── /files/{id}/stream endpoint ───────────────────────────────────────────────
 
 def test_stream_media_no_token(client):
-    """Missing token → 401 (line 268)."""
+    """Missing token → 401."""
     response = client.get("/upload/files/1/stream")
     assert response.status_code == 401
 
 
 def test_stream_media_invalid_token(client):
-    """Bad token → 401 (line 272)."""
+    """Bad token → 401."""
     response = client.get("/upload/files/1/stream?token=invalidtoken")
     assert response.status_code == 401
 
 
 def test_stream_media_file_not_found(client, auth_headers):
-    """Valid token but file_id doesn't exist → 404 (line 290)."""
-    # Get a valid token from auth_headers
+    """Valid token but file_id doesn't exist → 404."""
     token = auth_headers["Authorization"].split(" ")[1]
     response = client.get(f"/upload/files/99999/stream?token={token}")
     assert response.status_code == 404
@@ -273,7 +272,7 @@ def test_stream_media_file_not_found(client, auth_headers):
 @patch("app.routers.upload.process_pdf", return_value=["chunk1"])
 @patch("app.routers.upload.upsert_chunks", return_value=None)
 def test_stream_media_file_missing_on_disk(mock_upsert, mock_process, client, auth_headers):
-    """File in DB but not on disk → 404 (line 294)."""
+    """File in DB but not on disk → 404."""
     upload_resp = client.post(
         "/upload/pdf",
         files={"file": ("stream.pdf", io.BytesIO(b"%PDF-1.4 mock"), "application/pdf")},
@@ -288,12 +287,22 @@ def test_stream_media_file_missing_on_disk(mock_upsert, mock_process, client, au
     assert "disk" in response.json()["detail"]
 
 
-# ── NEW: summary cache hit (line 350) ────────────────────────────────────────
+# ── summary cache hit (line 350) ──────────────────────────────────────────────
 
 @patch("app.routers.upload.process_pdf", return_value=["chunk1"])
 @patch("app.routers.upload.upsert_chunks", return_value=None)
 def test_get_summary_cache_hit(mock_upsert, mock_process, client, auth_headers):
-    """Redis cache hit returns cached=True and skips summarize_file (line 350)."""
+    """Redis cache hit returns cached=True and skips summarize_file.
+
+    The get_summary route injects redis via FastAPI Depends(get_redis).
+    We override that dependency directly so the route sees our populated
+    FakeRedis instance — no need to patch summarize_file separately.
+    """
+    from app.main import app
+    from app.core.redis_client import get_redis
+    from tests.conftest import FakeRedis
+
+    # Upload a file first
     upload_resp = client.post(
         "/upload/pdf",
         files={"file": ("cached.pdf", io.BytesIO(b"%PDF-1.4 mock"), "application/pdf")},
@@ -301,13 +310,18 @@ def test_get_summary_cache_hit(mock_upsert, mock_process, client, auth_headers):
     )
     file_id = upload_resp.json()["id"]
 
-    # Pre-populate the fake_redis cache
-    from tests.conftest import fake_redis
-    fake_redis.setex(f"summary:{file_id}", 3600, "Cached summary value.")
+    # Build a fresh FakeRedis with the cache key pre-populated
+    local_redis = FakeRedis()
+    local_redis.setex(f"summary:{file_id}", 3600, "Cached summary value.")
+
+    # Override the dependency so the route uses our pre-populated instance
+    app.dependency_overrides[get_redis] = lambda: local_redis
 
     with patch("app.routers.upload.summarize_file", new=AsyncMock(return_value="Should not be called")) as mock_sum:
         response = client.get(f"/upload/files/{file_id}/summary", headers=auth_headers)
         mock_sum.assert_not_called()
+
+    app.dependency_overrides.pop(get_redis, None)
 
     assert response.status_code == 200
     data = response.json()
@@ -315,12 +329,20 @@ def test_get_summary_cache_hit(mock_upsert, mock_process, client, auth_headers):
     assert data["summary"] == "Cached summary value."
 
 
-# ── NEW: delete clears redis summary cache (line 378) ────────────────────────
+# ── delete clears redis summary cache (line 378) ──────────────────────────────
 
 @patch("app.routers.upload.process_pdf", return_value=["chunk1"])
 @patch("app.routers.upload.upsert_chunks", return_value=None)
 def test_delete_file_clears_summary_cache(mock_upsert, mock_process, client, auth_headers):
-    """Delete endpoint calls redis.delete for summary cache key (line 378)."""
+    """Delete endpoint calls redis.delete for summary cache key.
+
+    We inject a dedicated FakeRedis via dependency override so we can
+    inspect its state after the delete call without test-isolation issues.
+    """
+    from app.main import app
+    from app.core.redis_client import get_redis
+    from tests.conftest import FakeRedis
+
     upload_resp = client.post(
         "/upload/pdf",
         files={"file": ("toclear.pdf", io.BytesIO(b"%PDF-1.4 mock"), "application/pdf")},
@@ -328,12 +350,17 @@ def test_delete_file_clears_summary_cache(mock_upsert, mock_process, client, aut
     )
     file_id = upload_resp.json()["id"]
 
-    from tests.conftest import fake_redis
-    fake_redis.setex(f"summary:{file_id}", 3600, "old summary")
+    local_redis = FakeRedis()
+    local_redis.setex(f"summary:{file_id}", 3600, "old summary")
+
+    app.dependency_overrides[get_redis] = lambda: local_redis
 
     with patch("app.routers.upload.delete_user_file_index"):
         with patch("os.path.exists", return_value=False):
             del_resp = client.delete(f"/upload/files/{file_id}", headers=auth_headers)
+
+    app.dependency_overrides.pop(get_redis, None)
+
     assert del_resp.status_code == 204
-    # cache should be gone
-    assert fake_redis.get(f"summary:{file_id}") is None
+    # The cache key must have been deleted from the injected redis instance
+    assert local_redis.get(f"summary:{file_id}") is None

@@ -32,9 +32,6 @@ def test_redis_client_successful_connection():
         import importlib
         import app.core.redis_client as rc
         importlib.reload(rc)
-        # After reload with a successful ping the client is not None
-        # (it may be None if REDIS_URL is blank in test env, that's also fine)
-        # What matters is the lines were executed without exception.
         assert True
 
 
@@ -54,11 +51,20 @@ def test_redis_client_ping_failure_sets_none():
 # ─── security.py line 35: expired token ──────────────────────────────────────
 
 def test_decode_expired_token():
-    """Expired token returns None (covers the ExpiredSignatureError branch)."""
-    from datetime import timedelta
-    from app.core.security import create_access_token, decode_access_token
-    token = create_access_token(data={"sub": "1"}, expires_delta=timedelta(seconds=-1))
-    result = decode_access_token(token)
+    """Expired token returns None (covers the ExpiredSignatureError/JWTError branch).
+
+    create_access_token() takes only `data: dict` — it calculates expiry
+    from settings internally.  We force expiry by monkey-patching the
+    settings value used inside the function.
+    """
+    from app.core import security as sec
+
+    # Patch the settings object that security.py holds at module level
+    with patch.object(sec.settings, "access_token_expire_minutes", -1):
+        token = sec.create_access_token(data={"sub": "1"})
+
+    # Token was signed with exp already in the past → decode should return None
+    result = sec.decode_access_token(token)
     assert result is None
 
 
@@ -72,8 +78,6 @@ def test_main_startup_creates_tables():
         with TestClient(app) as c:
             resp = c.get("/health")
             assert resp.status_code == 200
-        # create_all should have been called (or called-once on first import)
-        # We just need the lines to be hit — no assertion needed beyond no crash.
 
 
 # ─── auth.py lines 70, 74: /auth/refresh with Redis = None → 503 ─────────────
@@ -83,11 +87,9 @@ def test_refresh_token_redis_unavailable(client, test_user):
     login = client.post("/auth/login", json={"email": "test@example.com", "password": "testpass123"})
     data = login.json()
 
-    # Override get_redis to return None for this request
     from app.core.redis_client import get_redis
     from app.main import app
     app.dependency_overrides[get_redis] = lambda: None
-    # Also patch the direct call inside auth.py
     with patch("app.routers.auth.get_redis", return_value=None):
         response = client.post("/auth/refresh", json={"user_id": data["id"], "refresh_token": data["refresh_token"]})
     app.dependency_overrides.pop(get_redis, None)
@@ -211,9 +213,9 @@ def test_process_audio_video_mp4_extracts_audio():
     mock_client.audio.transcriptions.create = AsyncMock(return_value=mock_response)
 
     with patch("app.services.audio_processor.client", mock_client):
-        with patch("os.system") as mock_sys:  # intercept ffmpeg call
+        with patch("os.system") as mock_sys:
             with patch("builtins.open", mock_open(read_data=b"audio")):
-                with patch("os.path.exists", return_value=True):  # line 44 cleanup
+                with patch("os.path.exists", return_value=True):
                     with patch("os.remove") as mock_rm:
                         from app.services.audio_processor import process_audio_video
                         segments, chunks = asyncio.run(process_audio_video("/tmp/video.mp4"))
@@ -224,8 +226,6 @@ def test_process_audio_video_mp4_extracts_audio():
 
 def test_process_audio_chunk_find_fallback_to_start():
     """Covers line 83: search_start pos==-1, retry from index 0."""
-    # Use two segments whose text overlaps in a way that makes find() from
-    # search_start return -1 for the second chunk.
     mock_seg1 = MagicMock()
     mock_seg1.text = "AAAA"
     mock_seg1.start = 0.0
@@ -260,20 +260,16 @@ def test_process_audio_chunk_last_resort_fallback():
 
     with patch("app.services.audio_processor.client", mock_client):
         with patch("builtins.open", mock_open(read_data=b"audio")):
-            # Patch str.find to always return -1 to force last-resort branch
             with patch("app.services.audio_processor.RecursiveCharacterTextSplitter") as mock_splitter:
                 instance = MagicMock()
-                # Return chunks whose text can't be found in the transcript
                 instance.split_text.return_value = ["XYZ_NOT_IN_TRANSCRIPT"]
                 mock_splitter.return_value = instance
                 from app.services.audio_processor import process_audio_video
-                # Reload to pick up patched splitter
                 import importlib
                 import app.services.audio_processor as ap_mod
                 importlib.reload(ap_mod)
                 ap_mod.client = mock_client
                 segments, chunks = asyncio.run(ap_mod.process_audio_video("test.mp3"))
-    # Should not raise; chunk gets prev_ts fallback
     assert len(chunks) >= 1
 
 
@@ -290,13 +286,29 @@ def test_build_context_plain_string_chunk():
 # ─── chat_engine.py lines 112-113: APIError in stream_answer ─────────────────
 
 def test_stream_answer_api_error():
-    """Covers lines 112-113: APIError yields error dict."""
+    """Covers lines 112-113: APIError yields error dict.
+
+    openai.APIError signature changed across versions — construct it safely
+    by subclassing rather than relying on keyword arguments.
+    """
     from openai import APIError
     mock_chunks = [{"text": "some context"}]
 
+    # Build a minimal APIError without touching its brittle __init__ signature.
+    class _FakeAPIError(APIError):
+        def __init__(self):
+            # Bypass APIError.__init__ entirely; just set the attributes it expects.
+            self.message = "simulated api error"
+            self.status_code = 500
+            self.body = {}
+            self.request = MagicMock()
+            self.response = MagicMock(status_code=500, headers={})
+
+        def __str__(self):
+            return self.message
+
     mock_openai_client = AsyncMock()
-    err = APIError("api error", response=MagicMock(status_code=500, headers={}), body={})
-    mock_openai_client.chat.completions.create = AsyncMock(side_effect=err)
+    mock_openai_client.chat.completions.create = AsyncMock(side_effect=_FakeAPIError())
 
     with patch("app.services.chat_engine.search_chunks", return_value=mock_chunks):
         with patch("app.services.chat_engine.client", mock_openai_client):

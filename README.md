@@ -25,7 +25,6 @@ Upload PDFs, audio, and video files — then ask intelligent questions about the
   <tr>
     <td align="center" width="50%">
       <img src="Test/Screenshots/Dashboard.png" alt="Dashboard — File Manager" width="100%"/>
-      
       <br/>
       <sub><b>📁 Dashboard — Upload & manage your documents and media</b></sub>
     </td>

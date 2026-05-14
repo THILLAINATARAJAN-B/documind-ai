@@ -1,4 +1,6 @@
 # backend/app/core/redis_client.py
+import sys
+
 import redis
 from app.core.config import get_settings
 
@@ -13,5 +15,7 @@ try:
 except Exception:
     redis_client = None
 
+# After (fixed)
 def get_redis():
-    return redis_client
+    return sys.modules[__name__].redis_client  # ← reads the live module attribute
+                                               #   every time it's called

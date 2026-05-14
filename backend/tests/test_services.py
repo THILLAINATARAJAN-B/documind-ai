@@ -58,7 +58,8 @@ class TestAudioProcessor:
         mock_response = MagicMock()
         mock_response.segments = [mock_seg]
 
-        mock_client = MagicMock()
+        # audio_processor.client is module-level; patch it directly
+        mock_client = AsyncMock()
         mock_client.audio.transcriptions.create = AsyncMock(return_value=mock_response)
 
         with patch("app.services.audio_processor.client", mock_client):
@@ -73,7 +74,7 @@ class TestAudioProcessor:
     def test_process_audio_empty_segments(self):
         mock_response = MagicMock()
         mock_response.segments = []
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         mock_client.audio.transcriptions.create = AsyncMock(return_value=mock_response)
 
         with patch("app.services.audio_processor.client", mock_client):
@@ -90,7 +91,7 @@ class TestAudioProcessor:
         mock_seg.end = 35.1
         mock_response = MagicMock()
         mock_response.segments = [mock_seg]
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         mock_client.audio.transcriptions.create = AsyncMock(return_value=mock_response)
 
         with patch("app.services.audio_processor.client", mock_client):
@@ -126,7 +127,6 @@ class TestEmbeddings:
             with patch("app.services.embeddings.settings") as mock_settings:
                 mock_settings.faiss_store_dir = str(tmp_path)
                 from app.services.embeddings import upsert_chunks
-                # Should not raise
                 upsert_chunks(["chunk one", "chunk two"], user_id=1, file_id=42)
 
     def test_upsert_empty_chunks(self):
@@ -153,12 +153,10 @@ class TestEmbeddings:
                 mock_settings.faiss_store_dir = str(tmp_path)
                 from app.services.embeddings import upsert_chunks, search_chunks
 
-                # First insert some data
                 mock_response.data = [MagicMock(embedding=[0.1] * 1536),
                                        MagicMock(embedding=[0.2] * 1536)]
                 upsert_chunks(["AI is great", "ML is useful"], user_id=1, file_id=1)
 
-                # Now search
                 mock_response.data = [MagicMock(embedding=[0.1] * 1536)]
                 result = search_chunks("AI", user_id=1, file_id=1)
                 assert isinstance(result, list)
@@ -167,7 +165,6 @@ class TestEmbeddings:
         with patch("app.services.embeddings.settings") as mock_settings:
             mock_settings.faiss_store_dir = str(tmp_path)
             from app.services.embeddings import delete_user_file_index
-            # Should not raise when no index exists
             delete_user_file_index(user_id=999, file_id=1)
 
 
@@ -175,7 +172,8 @@ class TestEmbeddings:
 
 class TestChatEngine:
     def test_stream_answer_pdf(self):
-        mock_chunks = ["Relevant chunk about AI"]
+        # search_chunks returns list of dicts
+        mock_chunks = [{"text": "Relevant chunk about AI"}]
 
         mock_chunk1 = MagicMock()
         mock_chunk1.choices = [MagicMock(delta=MagicMock(content="AI "))]
@@ -186,14 +184,13 @@ class TestChatEngine:
             for c in [mock_chunk1, mock_chunk2]:
                 yield c
 
-        mock_stream_obj = mock_stream()
-        mock_client = MagicMock()
-        mock_client.chat.completions.create = AsyncMock(return_value=mock_stream_obj)
+        mock_openai_client = AsyncMock()
+        mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_stream())
 
         mock_db = MagicMock()
 
         with patch("app.services.chat_engine.search_chunks", return_value=mock_chunks):
-            with patch("app.services.chat_engine.client", mock_client):
+            with patch("app.services.chat_engine.client", mock_openai_client):
                 from app.services.chat_engine import stream_answer
                 from app.models.models import FileType
 
@@ -207,25 +204,23 @@ class TestChatEngine:
                 assert any(r["type"] == "token" for r in results)
 
     def test_stream_answer_audio_with_timestamp(self):
-        mock_seg = MagicMock()
-        mock_seg.text = "AI is discussed here"
-        mock_seg.start_seconds = 12.4
-        mock_seg.segment_index = 0
+        # Chunk includes start_seconds so primary timestamp fires
+        mock_chunks = [{"text": "AI is discussed here", "start_seconds": 12.4}]
 
         mock_chunk1 = MagicMock()
-        mock_chunk1.choices = [MagicMock(delta=MagicMock(content="Answer text\nTIMESTAMP: 12.4"))]
+        mock_chunk1.choices = [MagicMock(delta=MagicMock(content="Answer text"))]
 
         async def mock_stream():
             yield mock_chunk1
 
-        mock_client = MagicMock()
-        mock_client.chat.completions.create = AsyncMock(return_value=mock_stream())
+        mock_openai_client = AsyncMock()
+        mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_stream())
 
         mock_db = MagicMock()
-        mock_db.query.return_value.filter.return_value.order_by.return_value.all.return_value = [mock_seg]
+        mock_db.query.return_value.filter.return_value.order_by.return_value.all.return_value = []
 
-        with patch("app.services.chat_engine.search_chunks", return_value=["context"]):
-            with patch("app.services.chat_engine.client", mock_client):
+        with patch("app.services.chat_engine.search_chunks", return_value=mock_chunks):
+            with patch("app.services.chat_engine.client", mock_openai_client):
                 from app.services.chat_engine import stream_answer
                 from app.models.models import FileType
 
@@ -245,12 +240,12 @@ class TestChatEngine:
             with patch("app.services.chat_engine.client"):
                 from app.services.chat_engine import summarize_file
                 mock_db = MagicMock()
+                mock_db.query.return_value.filter.return_value.order_by.return_value.all.return_value = []
                 result = asyncio.run(summarize_file(file_id=999, user_id=999, db=mock_db))
                 assert "No content" in result
 
     def test_summarize_file_with_content(self, tmp_path):
         import pickle, faiss
-        # Create a fake FAISS index + metadata for user 1
         user_path = tmp_path / "1"
         user_path.mkdir()
         index = faiss.IndexFlatL2(1536)
@@ -263,14 +258,15 @@ class TestChatEngine:
 
         mock_resp = MagicMock()
         mock_resp.choices = [MagicMock(message=MagicMock(content="Summary: ML overview"))]
-        mock_client = MagicMock()
-        mock_client.chat.completions.create = AsyncMock(return_value=mock_resp)
+        mock_openai_client = AsyncMock()
+        mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_resp)
 
         with patch("app.services.embeddings.settings") as mock_emb_settings:
             mock_emb_settings.faiss_store_dir = str(tmp_path)
-            with patch("app.services.chat_engine.client", mock_client):
+            with patch("app.services.chat_engine.client", mock_openai_client):
                 from app.services.chat_engine import summarize_file
                 mock_db = MagicMock()
+                mock_db.query.return_value.filter.return_value.order_by.return_value.all.return_value = []
                 result = asyncio.run(summarize_file(file_id=1, user_id=1, db=mock_db))
                 assert isinstance(result, str)
                 assert len(result) > 0
@@ -302,11 +298,12 @@ class TestSecurity:
         result = decode_access_token("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.wrongsig")
         assert result is None
 
+
 # ─── EMBEDDINGS EXTRA (covers lines 41-43, 80-82, 94-112) ────────────────────
 
 class TestEmbeddingsExtra:
     def test_upsert_chunks_existing_index(self, tmp_path):
-        """Lines 41-43: loading existing index branch."""
+        """Loading existing index branch."""
         import pickle, faiss
         user_path = tmp_path / "1"
         user_path.mkdir()
@@ -327,7 +324,7 @@ class TestEmbeddingsExtra:
                 upsert_chunks(["new chunk"], user_id=1, file_id=2)
 
     def test_search_chunks_filters_by_file_id(self, tmp_path):
-        """Lines 80-82: file_id filtering in search."""
+        """file_id filtering in search."""
         import pickle, faiss
         user_path = tmp_path / "1"
         user_path.mkdir()
@@ -350,11 +347,13 @@ class TestEmbeddingsExtra:
                 s.faiss_store_dir = str(tmp_path)
                 from app.services.embeddings import search_chunks
                 results = search_chunks("query", user_id=1, file_id=1)
-                assert "correct chunk" in results
-                assert "wrong file chunk" not in results
+                # search_chunks returns list of dicts
+                result_texts = [r["text"] if isinstance(r, dict) else r for r in results]
+                assert "correct chunk" in result_texts
+                assert "wrong file chunk" not in result_texts
 
     def test_delete_user_file_index_with_data(self, tmp_path):
-        """Lines 94-112: actual deletion rebuild."""
+        """Actual deletion rebuild."""
         import pickle, faiss
         user_path = tmp_path / "1"
         user_path.mkdir()
@@ -384,24 +383,27 @@ class TestEmbeddingsExtra:
         assert all(m["file_id"] == 1 for m in remaining)
 
 
-# ─── CHAT ENGINE EXTRA (covers lines 80-81, 99, 122-132) ─────────────────────
+# ─── CHAT ENGINE EXTRA ────────────────────────────────────────────────────────
 
 class TestChatEngineExtra:
     def test_stream_answer_no_timestamp_in_audio(self):
-        """Lines 80-81: audio response WITHOUT TIMESTAMP — no timestamp yielded."""
+        """Audio response where chunk has NO start_seconds — no timestamp yielded."""
+        # Chunk has no start_seconds key → no primary timestamp emitted
+        mock_chunks = [{"text": "The speaker talks about AI."}]
+
         mock_chunk = MagicMock()
         mock_chunk.choices = [MagicMock(delta=MagicMock(content="The speaker talks about AI."))]
 
         async def mock_stream():
             yield mock_chunk
 
-        mock_client = MagicMock()
-        mock_client.chat.completions.create = AsyncMock(return_value=mock_stream())
+        mock_openai_client = AsyncMock()
+        mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_stream())
         mock_db = MagicMock()
         mock_db.query.return_value.filter.return_value.order_by.return_value.all.return_value = []
 
-        with patch("app.services.chat_engine.search_chunks", return_value=["context"]):
-            with patch("app.services.chat_engine.client", mock_client):
+        with patch("app.services.chat_engine.search_chunks", return_value=mock_chunks):
+            with patch("app.services.chat_engine.client", mock_openai_client):
                 from app.services.chat_engine import stream_answer
                 from app.models.models import FileType
 
@@ -415,21 +417,23 @@ class TestChatEngineExtra:
                 assert any(r["type"] == "token" for r in results)
                 assert not any(r["type"] == "timestamp" for r in results)
 
-    def test_stream_answer_invalid_timestamp_value(self):
-        """Line 99: ValueError branch when TIMESTAMP value cannot be parsed as float."""
+    def test_stream_answer_inline_timestamp_in_audio(self):
+        """Secondary: inline TIMESTAMP: <float> marker in GPT output yields timestamp."""
+        mock_chunks = [{"text": "AI is discussed here"}]
+
         mock_chunk = MagicMock()
-        mock_chunk.choices = [MagicMock(delta=MagicMock(content="Some answer\nTIMESTAMP: notanumber"))]
+        # GPT outputs inline timestamp marker
+        mock_chunk.choices = [MagicMock(delta=MagicMock(content="Some answer\nTIMESTAMP: 12.4"))]
 
         async def mock_stream():
             yield mock_chunk
 
-        mock_client = MagicMock()
-        mock_client.chat.completions.create = AsyncMock(return_value=mock_stream())
+        mock_openai_client = AsyncMock()
+        mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_stream())
         mock_db = MagicMock()
-        mock_db.query.return_value.filter.return_value.order_by.return_value.all.return_value = []
 
-        with patch("app.services.chat_engine.search_chunks", return_value=["ctx"]):
-            with patch("app.services.chat_engine.client", mock_client):
+        with patch("app.services.chat_engine.search_chunks", return_value=mock_chunks):
+            with patch("app.services.chat_engine.client", mock_openai_client):
                 from app.services.chat_engine import stream_answer
                 from app.models.models import FileType
 
@@ -440,11 +444,39 @@ class TestChatEngineExtra:
                     return results
 
                 results = asyncio.run(collect())
-                assert any(r["type"] == "token" for r in results)
+                assert any(r["type"] == "timestamp" for r in results)
+
+    def test_stream_answer_invalid_inline_timestamp_ignored(self):
+        """Inline TIMESTAMP with non-numeric value is silently ignored."""
+        mock_chunks = [{"text": "context text"}]
+
+        mock_chunk = MagicMock()
+        mock_chunk.choices = [MagicMock(delta=MagicMock(content="Some answer\nTIMESTAMP: notanumber"))]
+
+        async def mock_stream():
+            yield mock_chunk
+
+        mock_openai_client = AsyncMock()
+        mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_stream())
+        mock_db = MagicMock()
+
+        with patch("app.services.chat_engine.search_chunks", return_value=mock_chunks):
+            with patch("app.services.chat_engine.client", mock_openai_client):
+                from app.services.chat_engine import stream_answer
+                from app.models.models import FileType
+
+                async def collect():
+                    results = []
+                    async for item in stream_answer("q", 1, 1, FileType.audio, mock_db):
+                        results.append(item)
+                    return results
+
+                results = asyncio.run(collect())
+                # Invalid timestamp value → no timestamp event
                 assert not any(r["type"] == "timestamp" for r in results)
 
     def test_summarize_multi_batch(self, tmp_path):
-        """Lines 122-132: 12 chunks → 2 batches + final reduce call."""
+        """12 chunks → 2 batches (batch_size=10) + 1 reduce call = 3 total calls."""
         import pickle, faiss
         user_path = tmp_path / "1"
         user_path.mkdir()
@@ -463,13 +495,16 @@ class TestChatEngineExtra:
             call_count += 1
             return MagicMock(choices=[MagicMock(message=MagicMock(content=f"Summary {call_count}"))])
 
-        mock_client = MagicMock()
-        mock_client.chat.completions.create = mock_create
+        mock_openai_client = MagicMock()
+        mock_openai_client.chat.completions.create = mock_create
 
         with patch("app.services.embeddings.settings") as s:
             s.faiss_store_dir = str(tmp_path)
-            with patch("app.services.chat_engine.client", mock_client):
+            with patch("app.services.chat_engine.client", mock_openai_client):
                 from app.services.chat_engine import summarize_file
-                result = asyncio.run(summarize_file(file_id=1, user_id=1, db=MagicMock()))
+                mock_db = MagicMock()
+                mock_db.query.return_value.filter.return_value.order_by.return_value.all.return_value = []
+                result = asyncio.run(summarize_file(file_id=1, user_id=1, db=mock_db))
                 assert isinstance(result, str)
+                # 12 chunks / 10 per batch = 2 map calls + 1 reduce call = 3
                 assert call_count >= 2

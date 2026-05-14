@@ -58,13 +58,14 @@ def test_get_segments_not_found(client, auth_headers):
 @patch("app.routers.upload.process_audio_video")
 @patch("app.routers.upload.upsert_chunks", return_value=None)
 def test_upload_audio_video(mock_upsert, mock_process_av, client, auth_headers):
-    """Covers upload.py audio route POST /upload/audio + _save_and_process audio branch."""
+    """POST /upload/audio — valid MP3 magic bytes pass validation."""
     async def fake_av(path):
-        return [{"text": "Hello", "start": 0.0, "end": 5.0}], ["Hello world transcript"]
+        return [{"text": "Hello", "start": 0.0, "end": 5.0}], [{"text": "Hello world transcript", "start_seconds": 0.0}]
 
     mock_process_av.side_effect = fake_av
 
-    fake_audio = io.BytesIO(b"fake mp3 content")
+    # Real MP3 magic bytes (ID3 header) so _validate_magic_bytes passes
+    fake_audio = io.BytesIO(b"ID3" + b"\x00" * 100)
     response = client.post(
         "/upload/audio",
         files={"file": ("test.mp3", fake_audio, "audio/mpeg")},
@@ -77,7 +78,7 @@ def test_upload_audio_video(mock_upsert, mock_process_av, client, auth_headers):
 @patch("app.routers.upload.process_pdf", return_value=["chunk1"])
 @patch("app.routers.upload.upsert_chunks", return_value=None)
 def test_list_files_with_content(mock_upsert, mock_process, client, auth_headers):
-    """Covers upload.py list route returning non-empty results."""
+    """list route returns non-empty results."""
     client.post(
         "/upload/pdf",
         files={"file": ("listed.pdf", io.BytesIO(b"%PDF-1.4 mock"), "application/pdf")},
@@ -91,7 +92,7 @@ def test_list_files_with_content(mock_upsert, mock_process, client, auth_headers
 @patch("app.routers.upload.process_pdf", return_value=["chunk1"])
 @patch("app.routers.upload.upsert_chunks", return_value=None)
 def test_get_segments_for_audio_file(mock_upsert, mock_process, client, auth_headers, db):
-    """Covers upload.py segments endpoint returning real data."""
+    """segments endpoint returns real data."""
     from app.models.models import File, FileType, TranscriptSegment
 
     f = File(
@@ -125,7 +126,7 @@ def test_get_segments_for_audio_file(mock_upsert, mock_process, client, auth_hea
 @patch("app.routers.upload.process_pdf", return_value=["chunk1"])
 @patch("app.routers.upload.upsert_chunks", return_value=None)
 def test_delete_file_removes_from_disk(mock_upsert, mock_process, client, auth_headers):
-    """Covers upload.py os.path.exists=True branch triggering os.remove."""
+    """os.path.exists=True branch triggers os.remove."""
     upload_resp = client.post(
         "/upload/pdf",
         files={"file": ("todelete.pdf", io.BytesIO(b"%PDF-1.4 mock"), "application/pdf")},
@@ -143,7 +144,7 @@ def test_delete_file_removes_from_disk(mock_upsert, mock_process, client, auth_h
 @patch("app.routers.upload.process_pdf", return_value=["chunk1", "chunk2"])
 @patch("app.routers.upload.upsert_chunks", return_value=None)
 def test_get_summary_via_upload_route(mock_upsert, mock_process, client, auth_headers):
-    """Covers upload.py GET /upload/files/{id}/summary route."""
+    """GET /upload/files/{id}/summary route."""
     upload_resp = client.post(
         "/upload/pdf",
         files={"file": ("sum.pdf", io.BytesIO(b"%PDF-1.4 mock"), "application/pdf")},
@@ -160,20 +161,20 @@ def test_get_summary_via_upload_route(mock_upsert, mock_process, client, auth_he
 
 
 def test_get_summary_file_not_found(client, auth_headers):
-    """Covers upload.py summary 404 branch."""
+    """summary 404 branch."""
     response = client.get("/upload/files/99999/summary", headers=auth_headers)
     assert response.status_code == 404
 
 
 def test_health_check(client):
-    """Covers main.py /health endpoint."""
+    """main.py /health endpoint."""
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
 
 
 def test_redis_client_none_fallback():
-    """Covers redis_client.py line 10: get_redis returns None on failed connection."""
+    """get_redis returns None on failed connection."""
     import app.core.redis_client as rm
     original = rm.redis_client
     rm.redis_client = None
@@ -183,7 +184,7 @@ def test_redis_client_none_fallback():
 
 
 def test_get_db_finally_block():
-    """Covers database.py lines 21-25: get_db finally block."""
+    """database.py get_db finally block."""
     from app.core.database import get_db
     gen = get_db()
     db = next(gen)
@@ -192,3 +193,21 @@ def test_get_db_finally_block():
         gen.throw(RuntimeError("forced close"))
     except (RuntimeError, StopIteration):
         pass
+
+
+@patch("app.routers.upload.process_pdf", return_value=["chunk1"])
+@patch("app.routers.upload.upsert_chunks", return_value=None)
+def test_upload_pdf_too_large(mock_upsert, mock_process, client, auth_headers):
+    """File exceeding max_file_size_mb returns 400."""
+    from unittest.mock import patch as mp
+    # Temporarily lower the limit to 0 MB so any file is "too large"
+    with mp("app.routers.upload.settings") as mock_settings:
+        mock_settings.max_file_size_mb = 0
+        mock_settings.upload_dir = "./uploads"
+        response = client.post(
+            "/upload/pdf",
+            files={"file": ("big.pdf", io.BytesIO(b"%PDF-1.4 content"), "application/pdf")},
+            headers=auth_headers,
+        )
+    assert response.status_code == 400
+    assert "exceeds" in response.json()["detail"]

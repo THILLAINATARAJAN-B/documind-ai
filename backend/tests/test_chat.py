@@ -15,10 +15,11 @@ def test_ask_creates_session(mock_upsert, mock_process, client, auth_headers):
     )
     file_id = upload_resp.json()["id"]
 
-    async def mock_stream(*args, **kwargs):
+    # Use `new=` not `side_effect=` so async-for works correctly
+    async def mock_stream_answer(*args, **kwargs):
         yield {"type": "token", "content": "Test answer"}
 
-    with patch("app.routers.chat.stream_answer", side_effect=mock_stream):
+    with patch("app.routers.chat.stream_answer", new=mock_stream_answer):
         with patch("app.routers.chat.get_redis") as mock_redis:
             mock_r = MagicMock()
             mock_r.incr.return_value = 1
@@ -45,7 +46,7 @@ def test_ask_file_not_found(client, auth_headers):
 
 
 def test_get_summary_file_not_found(client, auth_headers):
-    """Covers upload.py summary route 404 — file doesn't exist."""
+    """summary route 404 — file doesn't exist."""
     response = client.get("/upload/files/99999/summary", headers=auth_headers)
     assert response.status_code == 404
 
@@ -53,7 +54,7 @@ def test_get_summary_file_not_found(client, auth_headers):
 @patch("app.routers.upload.process_pdf", return_value=["chunk1", "chunk2"])
 @patch("app.routers.upload.upsert_chunks", return_value=None)
 def test_get_summary_completed(mock_upsert, mock_process, client, auth_headers):
-    """Covers upload.py GET /upload/files/{id}/summary — returns summary for uploaded file."""
+    """GET /upload/files/{id}/summary returns summary for uploaded file."""
     upload_resp = client.post(
         "/upload/pdf",
         files={"file": ("complete.pdf", io.BytesIO(b"%PDF-1.4 mock"), "application/pdf")},
@@ -70,7 +71,7 @@ def test_get_summary_completed(mock_upsert, mock_process, client, auth_headers):
 
 
 def test_get_messages_session_not_found(client, auth_headers):
-    """Covers chat.py GET /sessions/{id}/messages — 404 for missing session."""
+    """GET /sessions/{id}/messages — 404 for missing session."""
     response = client.get("/chat/sessions/99999/messages", headers=auth_headers)
     assert response.status_code == 404
 
@@ -78,7 +79,7 @@ def test_get_messages_session_not_found(client, auth_headers):
 @patch("app.routers.upload.process_pdf", return_value=["chunk1", "chunk2"])
 @patch("app.routers.upload.upsert_chunks", return_value=None)
 def test_get_messages_for_session(mock_upsert, mock_process, client, auth_headers, db):
-    """Covers chat.py GET /sessions/{id}/messages — returns messages list."""
+    """GET /sessions/{id}/messages — returns messages list."""
     from app.models.models import ChatSession, ChatMessage, MessageRole
 
     upload_resp = client.post(
@@ -112,7 +113,7 @@ def test_get_messages_for_session(mock_upsert, mock_process, client, auth_header
 @patch("app.routers.upload.process_pdf", return_value=["chunk1"])
 @patch("app.routers.upload.upsert_chunks", return_value=None)
 def test_ask_rate_limit_exceeded(mock_upsert, mock_process, client, auth_headers):
-    """Covers chat.py lines 35-38: rate limit raises 429 before StreamingResponse."""
+    """Rate limit raises 429 before StreamingResponse."""
     upload_resp = client.post(
         "/upload/pdf",
         files={"file": ("rate.pdf", io.BytesIO(b"%PDF-1.4 mock"), "application/pdf")},
@@ -125,7 +126,6 @@ def test_ask_rate_limit_exceeded(mock_upsert, mock_process, client, auth_headers
     mock_r.incr.return_value = 21
     mock_r.expire = MagicMock()
 
-    # Patch the direct call in chat module, not the DI dependency
     with patch("app.routers.chat.get_redis", return_value=mock_r):
         response = client.post(
             "/chat/ask",
@@ -135,3 +135,31 @@ def test_ask_rate_limit_exceeded(mock_upsert, mock_process, client, auth_headers
 
     assert response.status_code == 429
     assert "Rate limit" in response.json()["detail"]
+
+
+def test_ask_question_too_long(client, auth_headers):
+    """Question > 2000 chars returns 422 validation error."""
+    with patch("app.routers.chat.get_redis") as mock_redis:
+        mock_r = MagicMock()
+        mock_r.incr.return_value = 1
+        mock_redis.return_value = mock_r
+        response = client.post(
+            "/chat/ask",
+            json={"file_id": 1, "question": "x" * 2001},
+            headers=auth_headers,
+        )
+    assert response.status_code == 422
+
+
+def test_ask_question_empty(client, auth_headers):
+    """Empty question returns 422 validation error."""
+    with patch("app.routers.chat.get_redis") as mock_redis:
+        mock_r = MagicMock()
+        mock_r.incr.return_value = 1
+        mock_redis.return_value = mock_r
+        response = client.post(
+            "/chat/ask",
+            json={"file_id": 1, "question": "   "},
+            headers=auth_headers,
+        )
+    assert response.status_code == 422

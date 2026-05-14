@@ -292,17 +292,14 @@ def test_stream_media_file_missing_on_disk(mock_upsert, mock_process, client, au
 @patch("app.routers.upload.process_pdf", return_value=["chunk1"])
 @patch("app.routers.upload.upsert_chunks", return_value=None)
 def test_get_summary_cache_hit(mock_upsert, mock_process, client, auth_headers):
-    """Redis cache hit returns cached=True and skips summarize_file.
+    """Redis cache hit returns cached=True and skips summarize_file (line 350).
 
-    The get_summary route injects redis via FastAPI Depends(get_redis).
-    We override that dependency directly so the route sees our populated
-    FakeRedis instance — no need to patch summarize_file separately.
+    The client fixture already injects fake_redis as the get_redis dependency.
+    We pre-populate the cache key on that same fake_redis instance so the
+    route sees it as a cache hit and never calls summarize_file.
     """
-    from app.main import app
-    from app.core.redis_client import get_redis
-    from tests.conftest import FakeRedis
+    from tests.conftest import fake_redis
 
-    # Upload a file first
     upload_resp = client.post(
         "/upload/pdf",
         files={"file": ("cached.pdf", io.BytesIO(b"%PDF-1.4 mock"), "application/pdf")},
@@ -310,18 +307,12 @@ def test_get_summary_cache_hit(mock_upsert, mock_process, client, auth_headers):
     )
     file_id = upload_resp.json()["id"]
 
-    # Build a fresh FakeRedis with the cache key pre-populated
-    local_redis = FakeRedis()
-    local_redis.setex(f"summary:{file_id}", 3600, "Cached summary value.")
-
-    # Override the dependency so the route uses our pre-populated instance
-    app.dependency_overrides[get_redis] = lambda: local_redis
+    # Pre-populate the cache on the fake_redis the route already uses
+    fake_redis.setex(f"summary:{file_id}", 3600, "Cached summary value.")
 
     with patch("app.routers.upload.summarize_file", new=AsyncMock(return_value="Should not be called")) as mock_sum:
         response = client.get(f"/upload/files/{file_id}/summary", headers=auth_headers)
         mock_sum.assert_not_called()
-
-    app.dependency_overrides.pop(get_redis, None)
 
     assert response.status_code == 200
     data = response.json()
@@ -334,14 +325,13 @@ def test_get_summary_cache_hit(mock_upsert, mock_process, client, auth_headers):
 @patch("app.routers.upload.process_pdf", return_value=["chunk1"])
 @patch("app.routers.upload.upsert_chunks", return_value=None)
 def test_delete_file_clears_summary_cache(mock_upsert, mock_process, client, auth_headers):
-    """Delete endpoint calls redis.delete for summary cache key.
+    """Delete endpoint calls redis.delete for summary cache key (line 378).
 
-    We inject a dedicated FakeRedis via dependency override so we can
-    inspect its state after the delete call without test-isolation issues.
+    The client fixture already injects fake_redis as the get_redis dependency.
+    We pre-populate a cache key on that same instance and confirm it is
+    removed after the delete endpoint runs.
     """
-    from app.main import app
-    from app.core.redis_client import get_redis
-    from tests.conftest import FakeRedis
+    from tests.conftest import fake_redis
 
     upload_resp = client.post(
         "/upload/pdf",
@@ -350,17 +340,13 @@ def test_delete_file_clears_summary_cache(mock_upsert, mock_process, client, aut
     )
     file_id = upload_resp.json()["id"]
 
-    local_redis = FakeRedis()
-    local_redis.setex(f"summary:{file_id}", 3600, "old summary")
-
-    app.dependency_overrides[get_redis] = lambda: local_redis
+    # Pre-populate the cache on the fake_redis the route already uses
+    fake_redis.setex(f"summary:{file_id}", 3600, "old summary")
 
     with patch("app.routers.upload.delete_user_file_index"):
-        with patch("os.path.exists", return_value=False):
+        with patch("app.routers.upload.os.path.exists", return_value=False):
             del_resp = client.delete(f"/upload/files/{file_id}", headers=auth_headers)
 
-    app.dependency_overrides.pop(get_redis, None)
-
     assert del_resp.status_code == 204
-    # The cache key must have been deleted from the injected redis instance
-    assert local_redis.get(f"summary:{file_id}") is None
+    # The route must have called redis.delete — key is now gone
+    assert fake_redis.get(f"summary:{file_id}") is None

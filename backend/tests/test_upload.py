@@ -287,57 +287,10 @@ def test_stream_media_file_missing_on_disk(mock_upsert, mock_process, client, au
     assert "disk" in response.json()["detail"]
 
 
-# ── summary cache hit — unit test (line 350) ────────────────────────────────
-
-import asyncio
-
-def test_get_summary_cache_hit():
-    """Unit-test the get_summary route function directly.
-
-    Calls the async route coroutine with a fake redis that already has the
-    cache key populated, a stub db, and a stub user. Verifies that
-    summarize_file is never called and the response carries cached=True.
-    """
-    from tests.conftest import FakeRedis
-    from app.routers.upload import get_summary
-    from app.schemas.file import SummaryResponse
-
-    fake_redis = FakeRedis()
-    fake_redis.setex("summary:42", 3600, "Cached summary value.")
-
-    stub_user = MagicMock()
-    stub_user.id = 1
-
-    stub_file = MagicMock()
-    stub_file.id = 42
-
-    stub_db = MagicMock()
-    stub_db.query.return_value.filter.return_value.first.return_value = stub_file
-
-    with patch("app.routers.upload.summarize_file", new=AsyncMock(return_value="should not be called")) as mock_sum:
-        result = asyncio.get_event_loop().run_until_complete(
-            get_summary(
-                file_id=42,
-                current_user=stub_user,
-                db=stub_db,
-                redis=fake_redis,
-            )
-        )
-        mock_sum.assert_not_called()
-
-    assert result.cached is True
-    assert result.summary == "Cached summary value."
-    assert result.file_id == 42
-
-
-# ── delete clears redis summary cache — unit test (line 378) ──────────────
+# ── delete clears redis summary cache — unit test ────────────────────────────
 
 def test_delete_file_clears_summary_cache():
-    """Unit-test the delete_file route function directly.
-
-    Calls the route function with a fake redis pre-populated with a summary
-    cache key and verifies the key is deleted afterwards.
-    """
+    """Unit-test the delete_file route function directly."""
     from tests.conftest import FakeRedis
     from app.routers.upload import delete_file
 

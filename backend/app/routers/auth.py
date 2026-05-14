@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import (
@@ -6,7 +6,6 @@ from app.core.security import (
     verify_password,
     create_access_token,
     create_refresh_token,
-    decode_token,
 )
 from app.core.redis_client import get_redis
 from app.core.config import get_settings
@@ -47,7 +46,6 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     access_token = create_access_token({"sub": str(user.id)})
     refresh_token = create_refresh_token()
 
-    # Store refresh token in Redis with expiry
     redis = get_redis()
     if redis is not None:
         key = f"refresh:{user.id}:{refresh_token}"
@@ -80,7 +78,6 @@ def refresh_token_endpoint(payload: RefreshRequest, db: Session = Depends(get_db
     if not stored:
         raise HTTPException(401, "Invalid or expired refresh token")
 
-    # Rotate: delete old token, issue new ones
     redis.delete(key)
 
     new_access = create_access_token({"sub": str(user.id)})

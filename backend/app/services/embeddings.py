@@ -58,7 +58,6 @@ def _save_index(path: str, index, metadata: List[Dict]):
     with open(meta_tmp, "wb") as f:
         pickle.dump(metadata, f)
 
-    # Atomic rename — if either rename fails, originals are untouched
     os.replace(index_tmp, index_file)
     os.replace(meta_tmp, meta_file)
 
@@ -130,18 +129,11 @@ def search_chunks(
 def delete_user_file_index(user_id: int, file_id: int):
     """
     Remove all chunks belonging to a specific file from the FAISS index.
-
-    FIX vs old code: We no longer re-embed all kept chunks via OpenAI.
-    Instead we track the FAISS vector positions for each chunk in metadata,
-    then rebuild the index from the stored embedding vectors directly
-    using index.reconstruct() — zero additional API calls.
-
-    If the index type doesn't support reconstruct (e.g. IVF without storing),
-    we fall back to a safe full rebuild only for the kept chunks.
+    Rebuilds the index from stored embedding vectors using index.reconstruct()
+    — zero additional API calls.
     """
     path = _index_path(user_id)
     index_file = os.path.join(path, "index.faiss")
-    meta_file = os.path.join(path, "metadata.pkl")
 
     if not os.path.exists(index_file):
         return
@@ -153,15 +145,13 @@ def delete_user_file_index(user_id: int, file_id: int):
 
     removed_count = len(metadata) - len(kept_meta)
     if removed_count == 0:
-        return  # Nothing to delete
+        return
 
     if not kept_meta:
-        # All chunks belonged to this file — wipe everything cleanly
         new_index = faiss.IndexFlatL2(EMBEDDING_DIM)
         _save_index(path, new_index, [])
         return
 
-    # Reconstruct kept vectors directly from the FAISS index — NO API calls
     try:
         kept_vectors = np.vstack([
             index.reconstruct(i).reshape(1, -1) for i in kept_indices
@@ -172,7 +162,4 @@ def delete_user_file_index(user_id: int, file_id: int):
         _save_index(path, new_index, kept_meta)
 
     except Exception:
-        # Fallback: if reconstruct fails (shouldn't for IndexFlatL2),
-        # delete the whole user index so it gets rebuilt on next upload.
-        # Better to lose all embeddings than to corrupt the store.
         shutil.rmtree(path, ignore_errors=True)

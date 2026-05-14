@@ -1,256 +1,155 @@
-from typing import AsyncGenerator, Dict, List, Optional
+from typing import AsyncGenerator, Dict, List
 from openai import AsyncOpenAI, APIError, APIConnectionError, RateLimitError
 from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.services.embeddings import search_chunks
-from app.models.models import FileType, TranscriptSegment
+from app.models.models import TranscriptSegment
 import logging
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
-client = AsyncOpenAI(api_key=settings.openai_api_key)
-
-RAG_SYSTEM_PROMPT = """You are DocuMind AI, an assistant that answers questions based on provided document context.
-Use the context below to answer. If the context contains relevant information, use it.
-For follow-up questions like examples, elaborations, or clarifications — use the context to derive your answer.
-Only say "I could not find that information in the uploaded file" if the topic is completely absent from the context.
-Be helpful, concise, and accurate."""
-
-AUDIO_SYSTEM_PROMPT = """You are DocuMind AI. You answer questions based on a transcript of an audio/video file.
-Use the transcript context to answer fully. For follow-up questions or requests for examples, elaborate using what's in the transcript.
-Only say "I could not find that information" if the topic is completely absent from the transcript.
-Be helpful and concise. Do NOT include any TIMESTAMP text in your response."""
 
 
-def _find_best_timestamp(
-    answer_text: str,
-    segments: List[TranscriptSegment],
-    fallback_ts: float,
-    question: str = "",
-) -> float:
-    if not segments or not answer_text:
-        return fallback_ts
-
-    answer_lower = answer_text.lower()
-    question_lower = question.lower()
-
-    STOPWORDS = {
-        "the", "what", "is", "are", "about", "there", "any", "thing",
-        "that", "this", "with", "from", "have", "been", "will", "was",
-        "for", "can", "how", "does", "did", "its", "and", "not"
-    }
-
-    answer_words = [
-        w.strip(".,;:!?()\"'")
-        for w in answer_lower.split()
-        if len(w.strip(".,;:!?()\"'")) > 4
-    ]
-
-    question_words = [
-        w.strip(".,;:!?()\"'")
-        for w in question_lower.split()
-        if len(w.strip(".,;:!?()\"'")) > 2
-        and w.strip(".,;:!?()\"'") not in STOPWORDS
-    ]
-
-    if not answer_words and not question_words:
-        return fallback_ts
-
-    scored: List[tuple] = []
-
-    for seg in segments:
-        seg_lower = seg.text.lower()
-        score = sum(1 for w in answer_words if w in seg_lower)
-        score += sum(2 for w in question_words if w in seg_lower)
-        if score > 0:
-            scored.append((score, seg.start_seconds))
-
-    if not scored:
-        return fallback_ts
-
-    max_score = max(s for s, _ in scored)
-    threshold = max_score * 0.8
-    candidates = [ts for score, ts in scored if score >= threshold]
-    return min(candidates)
+def _build_context(chunks: List[Dict]) -> str:
+    parts = []
+    for chunk in chunks:
+        text = chunk.get("text", "")
+        start = chunk.get("start_seconds")
+        if start is not None:
+            minutes = int(start) // 60
+            seconds = int(start) % 60
+            parts.append(f"[{minutes}:{seconds:02d}] {text}")
+        else:
+            parts.append(text)
+    return "\n\n".join(parts)
 
 
 async def stream_answer(
     question: str,
     file_id: int,
     user_id: int,
-    file_type: FileType,
+    file_type: str,
     db: Session,
 ) -> AsyncGenerator[Dict, None]:
-    """Stream GPT-4o answer using RAG. Always ends with type=done."""
-
-    # ── done is ALWAYS yielded — even on early errors ─────────────────────────
-    error_occurred = False
+    """
+    Perform RAG search and stream GPT-4 answer tokens.
+    Yields dicts: {type: 'token'|'timestamp'|'error', content|value: ...}
+    """
+    client = AsyncOpenAI(api_key=settings.openai_api_key)
 
     try:
-        # ── 1. Semantic search ────────────────────────────────────────────────
-        try:
-            chunk_results: List[Dict] = search_chunks(
-                query=question, user_id=user_id, file_id=file_id, top_k=5
-            )
-        except Exception as e:
-            logger.error("FAISS search failed: %s", e)
-            yield {"type": "error", "content": "Failed to search document. Please try again."}
-            error_occurred = True
-            return
+        chunks = search_chunks(
+            query=question,
+            user_id=user_id,
+            file_id=file_id,
+            top_k=5,
+        )
+    except Exception as e:
+        logger.error("FAISS search failed: %s", e, exc_info=True)
+        yield {"type": "error", "content": "Failed to search document. Please try again."}
+        return
 
-        context_texts = [c["text"] for c in chunk_results] if chunk_results else []
-        context = "\n\n".join(context_texts) if context_texts else "No relevant context found."
+    if not chunks:
+        yield {"type": "token", "content": "I couldn't find relevant content in the uploaded file to answer your question."}
+        return
 
-        faiss_fallback_ts: float = 0.0
-        if file_type in [FileType.audio, FileType.video] and chunk_results:
-            for chunk in chunk_results:
-                if "start_seconds" in chunk:
-                    faiss_fallback_ts = chunk["start_seconds"]
-                    break
+    context = _build_context(chunks)
 
-        system_prompt = (
-            AUDIO_SYSTEM_PROMPT
-            if file_type in [FileType.audio, FileType.video]
-            else RAG_SYSTEM_PROMPT
+    is_av = file_type in ("audio", "video")
+    system_prompt = (
+        "You are a helpful assistant. Answer questions based ONLY on the provided context. "
+        "If the answer is not in the context, say so clearly. "
+        + ("Context includes timestamps in [MM:SS] format." if is_av else "")
+    )
+
+    user_prompt = f"Context:\n{context}\n\nQuestion: {question}"
+
+    timestamp_ref = None
+    if is_av and chunks:
+        first_ts = chunks[0].get("start_seconds")
+        if first_ts is not None:
+            timestamp_ref = first_ts
+
+    if timestamp_ref is not None:
+        yield {"type": "timestamp", "value": timestamp_ref}
+
+    try:
+        stream = await client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            stream=True,
+            temperature=0.2,
         )
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": f"Context:\n{context}\n\nQuestion: {question}",
-            },
-        ]
+        async for event in stream:
+            delta = event.choices[0].delta
+            if delta.content:
+                yield {"type": "token", "content": delta.content}
 
-        # ── 2. OpenAI streaming ───────────────────────────────────────────────
-        try:
-            stream = await client.chat.completions.create(
-                model="gpt-4o",
-                messages=messages,
-                stream=True,
-                temperature=0.3,
-                max_tokens=800,
-            )
-        except RateLimitError:
-            logger.error("OpenAI rate limit hit")
-            yield {"type": "error", "content": "Rate limit reached. Please wait a moment and try again."}
-            error_occurred = True
-            return
-        except APIConnectionError:
-            logger.error("OpenAI connection error")
-            yield {"type": "error", "content": "Could not connect to AI service. Check your connection."}
-            error_occurred = True
-            return
-        except APIError as e:
-            logger.error("OpenAI API error: %s", e)
-            yield {"type": "error", "content": "AI service error. Please try again."}
-            error_occurred = True
-            return
+    except RateLimitError:
+        logger.warning("OpenAI rate limit hit for user=%s", user_id)
+        yield {"type": "error", "content": "OpenAI rate limit reached. Please wait a moment and try again."}
 
-        # ── 3. Stream tokens — catch mid-stream errors separately ─────────────
-        full_answer = ""
-        try:
-            async for chunk in stream:
-                delta = chunk.choices[0].delta
-                if delta.content:
-                    full_answer += delta.content
-                    yield {"type": "token", "content": delta.content}
-        except Exception as e:
-            logger.error("Mid-stream error: %s", e)
-            # Partial answer already sent — append error notice rather than blank
-            yield {"type": "error", "content": "Stream interrupted. The answer above may be incomplete."}
-            error_occurred = True
-            return
+    except APIConnectionError as e:
+        logger.error("OpenAI connection error: %s", e)
+        yield {"type": "error", "content": "Could not connect to OpenAI. Check your internet connection."}
 
-        # ── 4. Timestamp (audio/video only) ───────────────────────────────────
-        if file_type in [FileType.audio, FileType.video]:
-            try:
-                segments = (
-                    db.query(TranscriptSegment)
-                    .filter(TranscriptSegment.file_id == file_id)
-                    .order_by(TranscriptSegment.segment_index)
-                    .all()
-                )
-                best_ts = _find_best_timestamp(
-                    answer_text=full_answer,
-                    segments=segments,
-                    fallback_ts=faiss_fallback_ts,
-                    question=question,
-                )
-                yield {"type": "timestamp", "value": best_ts}
-            except Exception as e:
-                logger.error("Timestamp resolution failed: %s", e)
-                # Non-fatal — skip timestamp, don't break the stream
+    except APIError as e:
+        logger.error("OpenAI API error: %s", e, exc_info=True)
+        yield {"type": "error", "content": f"OpenAI API error: {e.message}"}
 
     except Exception as e:
         logger.error("Unexpected error in stream_answer: %s", e, exc_info=True)
         yield {"type": "error", "content": "An unexpected error occurred. Please try again."}
-        error_occurred = True
-
-    finally:
-        # ── GUARANTEED: done is always the last event sent ────────────────────
-        yield {"type": "done"}
 
 
-async def summarize_file(file_id: int, user_id: int, db: Session) -> str:
-    """Map-reduce summarization over all chunks of a file."""
-    from app.services.embeddings import _index_path
-    import os
-    import pickle
+async def summarize_file(
+    file_id: int,
+    user_id: int,
+    db: Session,
+) -> str:
+    """
+    Summarize the content of a file using its transcript segments (audio/video)
+    or FAISS-indexed chunks (PDF). Cached by the caller.
+    """
+    client = AsyncOpenAI(api_key=settings.openai_api_key)
 
-    path = _index_path(user_id)
-    meta_file = os.path.join(path, "metadata.pkl")
-    if not os.path.exists(meta_file):
-        return "No content found for this file."
+    segments = (
+        db.query(TranscriptSegment)
+        .filter(TranscriptSegment.file_id == file_id)
+        .order_by(TranscriptSegment.segment_index)
+        .all()
+    )
 
-    with open(meta_file, "rb") as f:
-        metadata = pickle.load(f)
-
-    file_chunks = [m["text"] for m in metadata if m["file_id"] == file_id]
-    if not file_chunks:
-        return "No content found for this file."
-
-    batch_size = 10
-    partial_summaries = []
-    for i in range(0, len(file_chunks), batch_size):
-        batch = file_chunks[i: i + batch_size]
-        batch_text = "\n\n".join(batch)
-        try:
-            resp = await client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "Summarize the following content concisely in 3-5 sentences.",
-                    },
-                    {"role": "user", "content": batch_text},
-                ],
-                temperature=0.3,
-                max_tokens=300,
-            )
-            partial_summaries.append(resp.choices[0].message.content)
-        except Exception as e:
-            logger.error("Summarize batch error: %s", e)
-            partial_summaries.append("[Summary unavailable for this section]")
-
-    if len(partial_summaries) == 1:
-        return partial_summaries[0]
-
-    combined = "\n\n".join(partial_summaries)
-    try:
-        final_resp = await client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "Combine these partial summaries into one cohesive summary.",
-                },
-                {"role": "user", "content": combined},
-            ],
-            temperature=0.3,
-            max_tokens=400,
+    if segments:
+        context = " ".join(s.text for s in segments)
+    else:
+        chunks = search_chunks(
+            query="summarize the main content",
+            user_id=user_id,
+            file_id=file_id,
+            top_k=10,
         )
-        return final_resp.choices[0].message.content
-    except Exception as e:
-        logger.error("Summarize reduce error: %s", e)
-        return "\n\n".join(partial_summaries)
+        context = " ".join(c["text"] for c in chunks)
+
+    if not context.strip():
+        return "No content available to summarize."
+
+    context = context[:8000]
+
+    response = await client.chat.completions.create(
+        model="gpt-4",
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a helpful assistant. Summarize the following content concisely in 3-5 sentences.",
+            },
+            {"role": "user", "content": f"Content:\n{context}"},
+        ],
+        temperature=0.3,
+    )
+
+    return response.choices[0].message.content or "Summary not available."
